@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm>=7.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hintforge"
+version = "0.1.0"
+description = "AI-powered contextual password recovery for ZIP, RAR, PDF, 7z and TAR archives"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [{name = "HintForge Collective"}]
+keywords = ["password", "recovery", "archive", "ollama", "llm", "zip", "rar", "pdf"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Security :: Cryptography",
+    "Topic :: Utilities",
+]
+
+dependencies = [
+    "click>=8.1.7",
+    "rich>=13.7.0",
+    "ollama>=0.2.0",
+    "pydantic>=2.6.0",
+    "py7zr>=0.20.0",
+    "rarfile>=5.1.0",
+    "pikepdf>=8.11.0",
+    "python-magic>=0.4.27; platform_system != 'Windows'",
+    "python-magic-bin>=0.4.14; platform_system == 'Windows'",
+]
+
+[project.scripts]
+hintforge = "hintforge.cli:cli"
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0.0",
+    "pytest-mock>=3.12.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["hintforge*"]
+
+[tool.setuptools.package-data]
+hintforge = ["*.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+addopts = "-q --tb=short"
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
