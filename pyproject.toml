@@ -8,14 +8,13 @@ version = "0.1.0"
 description = "AI-powered contextual password recovery for ZIP, RAR, PDF, 7z and TAR archives"
 readme = "README.md"
 requires-python = ">=3.9"
-license = {text = "MIT"}
+license = "MIT"
 authors = [{name = "HintForge Collective"}]
 keywords = ["password", "recovery", "archive", "ollama", "llm", "zip", "rar", "pdf"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: End Users/Desktop",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
@@ -30,7 +29,7 @@ dependencies = [
     "ollama>=0.2.0",
     "pydantic>=2.6.0",
     "py7zr>=0.20.0",
-    "rarfile>=5.1.0",
+    "rarfile>=4.5",
     "pikepdf>=8.11.0",
     "python-magic>=0.4.27; platform_system != 'Windows'",
     "python-magic-bin>=0.4.14; platform_system == 'Windows'",
