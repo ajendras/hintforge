@@ -101,7 +101,7 @@ def cli() -> None:
 @click.option(
     "--format",
     "-f",
-    type=click.Choice(["auto", "zip", "rar", "pdf", "7z", "tar"]),
+    type=click.Choice(["auto", "zip", "rar", "pdf", "7z", "tar", "office", "docx", "xlsx"]),
     default="auto",
     help="Force archive format (default: auto-detect)",
 )
@@ -197,7 +197,7 @@ def recover_cmd(
 @click.option(
     "--format",
     "-f",
-    type=click.Choice(["auto", "zip", "rar", "pdf", "7z", "tar"]),
+    type=click.Choice(["auto", "zip", "rar", "pdf", "7z", "tar", "office", "docx", "xlsx"]),
     default="auto",
     help="Force archive format (default: auto-detect)",
 )

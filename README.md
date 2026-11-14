@@ -12,7 +12,7 @@
 <img src="https://img.shields.io/github/last-commit/ajendras/hintforge?style=for-the-badge&color=ff0044" alt="Last commit">
 <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-22c55e?style=for-the-badge" alt="PRs welcome"></a>
 
-**AI-powered contextual password recovery for ZIP, RAR, PDF and TAR archives**
+**AI-powered contextual password recovery for ZIP, RAR, PDF, 7z, TAR and Office (docx/xlsx) documents**
 
 [✨ Features](#-features) • [⚡ Quick start](#-quick-start) • [🧰 Usage](#-usage) • [🧩 Architecture](#-architecture) • [📍 Roadmap](#-roadmap) • [🤝 Contributing](#-contributing)
 
@@ -25,7 +25,7 @@ People regularly forget passwords to their own archives. Brute-force and plain d
 
 - **Context Oracle**: `generate_candidates()` turns natural-language hints into high-probability candidates using local models
 - **Hybrid intelligence**: Combines AI guesses with `DictionaryStrategy`, `MaskStrategy` and rules before testing
-- **Multi-format support**: Native handling for ZIP, RAR, PDF, 7z and TAR via `handlers.detect_format()` and `open_with_password()`
+- **Multi-format support**: Native handling for ZIP, RAR, PDF, 7z, TAR and Office (DOCX/XLSX) via `handlers.detect_format()` and `open_with_password()`
 - **Safe & resumable**: Dry-run mode, non-destructive `try_password()`, session checkpoints in `.hintforge/`, and strength analysis
 - **Brutalist live UI**: Real-time progress, ETA and chunky neo-brutalist panels built with Rich
 
@@ -43,7 +43,7 @@ Local LLM converts hints into ranked <code>Candidate</code> objects
 </td>
 <td>
 📦 <b>Multi-Format</b><br>
-Native support for ZIP, RAR, PDF, 7z and TAR archives
+Native support for ZIP, RAR, PDF, 7z, TAR and Office (DOCX/XLSX) documents
 </td>
 <td>
 🔀 <b>Hybrid Attacks</b><br>
@@ -196,7 +196,7 @@ flowchart TD
     Tester --> Handlers[handlers.py<br>detect_format() + open_with_password()]
     Core --> Session[(SessionState<br>.hintforge/*.json)]
     Core --> Utils[utils.py<br>brutalist UI + config]
-    Handlers --> ZIP[RAR/PDF/7z/TAR handlers]
+    Handlers --> ZIP[RAR/PDF/7z/TAR/OFFICE handlers]
 ```
 
 The orchestrator in `core.py` coordinates the Context Oracle, pluggable strategies, tester facade and session persistence. All data flows through Pydantic `Candidate` and `Config` models, keeping the pipeline type-safe, resumable and easy to extend.
@@ -214,7 +214,7 @@ The orchestrator in `core.py` coordinates the Context Oracle, pluggable strategi
 │   ├── oracle.py                  # Ollama integration, JSON parsing, _parse_llm_response()
 │   ├── strategies.py              # BaseStrategy, AIStrategy, DictionaryStrategy, MaskStrategy, run_strategy()
 │   ├── tester.py                  # try_password(), format-specific _test_* helpers
-│   ├── handlers.py                # detect_format(), open_with_password(), PasswordError
+│   ├── handlers.py                # detect_format(), open_with_password(), PasswordError (now with Office)
 │   ├── models.py                  # Pydantic models: Candidate, Config, SessionState, Job
 │   └── utils.py                   # load_config(), save_session(), brutalist_panel(), sanitize_password()
 ├── tests/
@@ -236,7 +236,7 @@ Tests cover candidate generation (mocked Ollama in `test_oracle.py`), password t
 
 <!-- roadmap:start -->
 - [x] **v0.1.0** — first release: Context Oracle, Multi-Format, Hybrid Attacks, Likelihood Ranking
-- [ ] Add Office document (docx/xlsx) handlers
+- [x] Add Office document (docx/xlsx) handlers
 - [ ] Hashcat integration for GPU-accelerated mask and rule attacks
 - [ ] Simple brutalist web dashboard for job monitoring
 - [ ] Auto-extract context from filename, nearby files and EXIF

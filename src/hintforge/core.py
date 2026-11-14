@@ -63,7 +63,7 @@ def analyze(archive_path: str, forced_format: str | None = None) -> dict[str, An
     """Analyze encryption strength of an archive and recommend an attack strategy.
 
     Uses file magic/extension and basic header inspection. Returns a report
-    compatible with the CLI analysis table.
+    compatible with the CLI analysis table. Now includes Office (docx/xlsx).
     """
     if not Path(archive_path).exists():
         raise FileNotFoundError(f"Archive not found: {archive_path}")
@@ -79,6 +79,7 @@ def analyze(archive_path: str, forced_format: str | None = None) -> dict[str, An
         "7z": 9.1,
         "pdf": 7.0,
         "tar": 5.0,
+        "office": 7.5,
     }
 
     encryption_map = {
@@ -87,6 +88,7 @@ def analyze(archive_path: str, forced_format: str | None = None) -> dict[str, An
         "7z": "7-Zip AES-256",
         "pdf": "PDF AES-128/256",
         "tar": "None (or external GPG)",
+        "office": "MS Office 2007+ AES-128/256 (ECMA-376)",
     }
 
     strength = strength_map.get(fmt, 6.0)
@@ -95,7 +97,7 @@ def analyze(archive_path: str, forced_format: str | None = None) -> dict[str, An
     recommended = "ai_hybrid"
     if strength > 8.5:
         recommended = "ai_mask_dictionary"
-    elif fmt == "pdf":
+    elif fmt in ("pdf", "office"):
         recommended = "ai"
 
     return {

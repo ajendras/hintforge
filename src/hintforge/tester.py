@@ -1,7 +1,8 @@
 """Password testing facade for HintForge.
 
-Dispatches to format-specific handlers for ZIP, RAR, PDF, 7z and TAR.
-Uses non-destructive read/test operations only. Never modifies archives.
+Dispatches to format-specific handlers for ZIP, RAR, PDF, 7z, TAR and
+Office (docx/xlsx). Uses non-destructive read/test operations only.
+Never modifies archives.
 """
 
 from __future__ import annotations
@@ -11,11 +12,13 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+import msoffcrypto
 import pikepdf
 import py7zr
 import rarfile
+from msoffcrypto.exceptions import DecryptionError
 
-from .handlers import detect_format  # planned thin wrapper; we provide robust fallback
+from .handlers import detect_format, open_with_password, PasswordError
 from .models import Candidate
 from .utils import sanitize_password
 
@@ -27,6 +30,8 @@ def _detect_format_fallback(path: str) -> str:
         raise FileNotFoundError(f"Archive not found: {path}")
 
     suffix = p.suffix.lower()
+    if suffix in (".docx", ".xlsx", ".docm", ".xlsm", ".pptx"):
+        return "office"
     if suffix in (".zip", ".jar"):
         return "zip"
     if suffix == ".rar":
@@ -49,6 +54,8 @@ def _detect_format_fallback(path: str) -> str:
             return "rar"
         if "pdf" in mime:
             return "pdf"
+        if any(o in mime for o in ("ms-office", "officedocument")):
+            return "office"
     except Exception:  # pragma: no cover - optional dependency
         pass
 
@@ -131,11 +138,37 @@ def _test_tar(path: str, password: str) -> bool:
     return False
 
 
+def _test_office(path: str, password: str) -> bool:
+    """Test Microsoft Office (docx/xlsx) document password via msoffcrypto.
+
+    Uses a discarding sink so that we do not hold the full decrypted
+    document in memory.
+    """
+    try:
+        with open(path, "rb") as f:
+            office = msoffcrypto.OfficeFile(f)
+            if not office.is_encrypted():
+                return True
+            office.load_key(password=password)
+
+            class _Sink:
+                def write(self, data: bytes) -> int:
+                    return len(data)
+
+            office.decrypt(_Sink())
+            return True
+    except (DecryptionError, ValueError, RuntimeError, OSError):
+        return False
+    except Exception:  # pragma: no cover
+        return False
+
+
 def try_password(path: str, pw: str) -> bool:
     """Attempt to unlock the archive with the supplied password.
 
     Dispatches to the correct handler based on auto-detected format.
-    All operations are read-only and non-destructive.
+    All operations are read-only and non-destructive. Now supports
+    Office (docx/xlsx) documents.
 
     Args:
         path: Absolute or relative path to the encrypted archive.
@@ -174,6 +207,8 @@ def try_password(path: str, pw: str) -> bool:
         return _test_pdf(str(archive_path), password)
     if fmt == "tar":
         return _test_tar(str(archive_path), password)
+    if fmt == "office":
+        return _test_office(str(archive_path), password)
 
     # Unknown format falls back to ZIP test (most common)
     return _test_zip(str(archive_path), password)

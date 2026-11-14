@@ -2,7 +2,8 @@
 
 Robust format detection via extension and magic bytes.
 Context manager for opening archives with a password (non-destructive).
-Supports ZIP, RAR, 7z, PDF and TAR. Raises clear errors on bad passwords.
+Supports ZIP, RAR, 7z, PDF, TAR and Office (docx/xlsx via msoffcrypto).
+Raises clear errors on bad passwords.
 """
 
 from __future__ import annotations
@@ -13,9 +14,11 @@ import zipfile
 from pathlib import Path
 from typing import Any, Iterator
 
+import msoffcrypto
 import pikepdf
 import py7zr
 import rarfile
+from msoffcrypto.exceptions import DecryptionError
 
 
 class PasswordError(ValueError):
@@ -25,7 +28,9 @@ class PasswordError(ValueError):
 def detect_format(archive_path: str) -> str:
     """Detect archive format using file extension first, then magic bytes.
 
-    Supports: zip, rar, 7z, pdf, tar. Falls back to 'zip' for unknown files.
+    Supports: zip, rar, 7z, pdf, tar, office (docx/xlsx). Falls back to 'zip'
+    for unknown files. Office documents are detected before ZIP because modern
+    Office files are ZIP-based containers.
 
     Args:
         archive_path: Path to the archive file.
@@ -42,8 +47,13 @@ def detect_format(archive_path: str) -> str:
 
     suffix = path.suffix.lower()
 
-    # Fast extension mapping
+    # Fast extension mapping (office before zip)
     ext_map = {
+        ".docx": "office",
+        ".xlsx": "office",
+        ".docm": "office",
+        ".xlsm": "office",
+        ".pptx": "office",
         ".zip": "zip",
         ".jar": "zip",
         ".war": "zip",
@@ -90,6 +100,8 @@ def detect_format(archive_path: str) -> str:
             return "pdf"
         if "7z" in mime or "x-7z-compressed" in mime:
             return "7z"
+        if "ms-office" in mime or "officedocument" in mime:
+            return "office"
     except (ImportError, OSError, Exception):
         pass
 
@@ -103,8 +115,8 @@ def open_with_password(
     """Context manager to open an encrypted archive with a password.
 
     Yields a ready-to-use archive object (ZipFile, RarFile, SevenZipFile,
-    Pdf object, or TarFile). Automatically tests the password on encrypted
-    members. Never modifies the original file.
+    Pdf object, TarFile or msoffcrypto OfficeFile). Automatically tests
+    the password on encrypted members. Never modifies the original file.
 
     Args:
         archive_path: Path to archive.
@@ -164,6 +176,20 @@ def open_with_password(
             with tarfile.open(archive_path) as tf:
                 yield tf
 
+        elif fmt == "office":
+            with open(archive_path, "rb") as f:
+                office = msoffcrypto.OfficeFile(f)
+                if office.is_encrypted():
+                    office.load_key(password=pw)
+                    # Validate by decrypting to a discarding sink (no full
+                    # in-memory copy of the document)
+                    class _Sink:
+                        def write(self, data: bytes) -> int:
+                            return len(data)
+
+                    office.decrypt(_Sink())
+                yield office
+
         else:
             # Unknown fallback to ZIP
             with zipfile.ZipFile(archive_path) as zf:
@@ -175,6 +201,7 @@ def open_with_password(
         py7zr.BadPassword,
         pikepdf.PasswordError,
         zipfile.BadZipFile,
+        DecryptionError,
         RuntimeError,
     ) as exc:
         raise PasswordError(f"Incorrect password for {fmt.upper()} archive") from exc

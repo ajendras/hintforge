@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "hintforge"
 version = "0.1.0"
-description = "AI-powered contextual password recovery for ZIP, RAR, PDF, 7z and TAR archives"
+description = "AI-powered contextual password recovery for ZIP, RAR, PDF, 7z, TAR and Office (docx/xlsx) documents"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
 authors = [{name = "HintForge Collective"}]
-keywords = ["password", "recovery", "archive", "ollama", "llm", "zip", "rar", "pdf"]
+keywords = ["password", "recovery", "archive", "ollama", "llm", "zip", "rar", "pdf", "office", "docx", "xlsx"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
@@ -31,6 +31,7 @@ dependencies = [
     "py7zr>=0.20.0",
     "rarfile>=4.5",
     "pikepdf>=8.11.0",
+    "msoffcrypto>=5.0.0",
     "python-magic>=0.4.27; platform_system != 'Windows'",
     "python-magic-bin>=0.4.14; platform_system == 'Windows'",
 ]
