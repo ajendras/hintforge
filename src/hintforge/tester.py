@@ -1,8 +1,8 @@
 """Password testing facade for HintForge.
 
 Dispatches to format-specific handlers for ZIP, RAR, PDF, 7z, TAR and
-Office (docx/xlsx). Uses non-destructive read/test operations only.
-Never modifies archives.
+Office (docx/xlsx via optional msoffcrypto). Uses non-destructive
+read/test operations only. Never modifies archives.
 """
 
 from __future__ import annotations
@@ -12,11 +12,19 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-import msoffcrypto
 import pikepdf
 import py7zr
 import rarfile
-from msoffcrypto.exceptions import DecryptionError
+
+# msoffcrypto is an optional dependency (no compatible release for Python 3.12+ yet)
+try:
+    import msoffcrypto
+    from msoffcrypto.exceptions import DecryptionError
+    _HAS_MSOFFCRYPTO = True
+except ImportError:
+    msoffcrypto = None  # type: ignore[assignment]
+    DecryptionError = Exception  # type: ignore[assignment]
+    _HAS_MSOFFCRYPTO = False
 
 from .handlers import detect_format, open_with_password, PasswordError
 from .models import Candidate
@@ -144,6 +152,8 @@ def _test_office(path: str, password: str) -> bool:
     Uses a discarding sink so that we do not hold the full decrypted
     document in memory.
     """
+    if not _HAS_MSOFFCRYPTO:
+        return False
     try:
         with open(path, "rb") as f:
             office = msoffcrypto.OfficeFile(f)

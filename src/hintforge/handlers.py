@@ -2,7 +2,7 @@
 
 Robust format detection via extension and magic bytes.
 Context manager for opening archives with a password (non-destructive).
-Supports ZIP, RAR, 7z, PDF, TAR and Office (docx/xlsx via msoffcrypto).
+Supports ZIP, RAR, 7z, PDF, TAR and Office (docx/xlsx via optional msoffcrypto).
 Raises clear errors on bad passwords.
 """
 
@@ -14,11 +14,19 @@ import zipfile
 from pathlib import Path
 from typing import Any, Iterator
 
-import msoffcrypto
 import pikepdf
 import py7zr
 import rarfile
-from msoffcrypto.exceptions import DecryptionError
+
+# msoffcrypto is an optional dependency (no compatible release for Python 3.12+ yet)
+try:
+    import msoffcrypto
+    from msoffcrypto.exceptions import DecryptionError
+    _HAS_MSOFFCRYPTO = True
+except ImportError:
+    msoffcrypto = None  # type: ignore[assignment]
+    DecryptionError = Exception  # type: ignore[assignment]
+    _HAS_MSOFFCRYPTO = False
 
 
 class PasswordError(ValueError):
@@ -133,6 +141,12 @@ def open_with_password(
     fmt = forced_format or detect_format(archive_path)
     pw = password.strip()
 
+    if fmt == "office" and not _HAS_MSOFFCRYPTO:
+        raise RuntimeError(
+            "Office (docx/xlsx) support requires the msoffcrypto package "
+            "(not available on Python 3.12+ yet)."
+        )
+
     try:
         if fmt == "zip":
             with zipfile.ZipFile(archive_path) as zf:
@@ -204,6 +218,8 @@ def open_with_password(
         DecryptionError,
         RuntimeError,
     ) as exc:
+        if "msoffcrypto" in str(exc).lower():
+            raise
         raise PasswordError(f"Incorrect password for {fmt.upper()} archive") from exc
     except Exception as exc:
         raise RuntimeError(f"Failed to open {archive_path} as {fmt}: {exc}") from exc

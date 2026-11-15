@@ -32,7 +32,7 @@ dependencies = [
     "py7zr>=0.20.0",
     "rarfile>=4.5",
     "pikepdf>=8.11.0",
-    "msoffcrypto>=4.2.0",
+    "msoffcrypto>=4.2.0; python_version < '3.12'",
     "python-magic>=0.4.27; platform_system != 'Windows'",
     "python-magic-bin>=0.4.14; platform_system == 'Windows'",
 ]
