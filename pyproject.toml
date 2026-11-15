@@ -19,6 +19,7 @@ classifiers = [
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Security :: Cryptography",
     "Topic :: Utilities",
 ]
@@ -31,7 +32,7 @@ dependencies = [
     "py7zr>=0.20.0",
     "rarfile>=4.5",
     "pikepdf>=8.11.0",
-    "msoffcrypto>=5.0.0",
+    "msoffcrypto>=4.2.0",
     "python-magic>=0.4.27; platform_system != 'Windows'",
     "python-magic-bin>=0.4.14; platform_system == 'Windows'",
 ]
