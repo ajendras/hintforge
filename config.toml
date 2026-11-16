@@ -1,21 +1,10 @@
-# HintForge — Default Configuration
-# TOML format, loaded by utils.load_config() into Pydantic Config model.
-# All values can be overridden via CLI flags or environment variables.
-
 model = "llama3"
+max_candidates = 75
 temperature = 0.75
 top_p = 0.9
-max_candidates = 75
+enabled_strategies = ["ai", "dictionary", "mask", "hashcat"]
 min_score_threshold = 0.25
-
-enabled_strategies = ["ai", "dictionary", "mask"]
-
-# Optional custom dictionary (one candidate per line)
 dictionary_path = ""
-
-# Directory for session checkpoints (created automatically)
-sessions_dir = ".hintforge"
-
-# UI / logging preferences
-live_progress = true
-brutalist_ui = true
+hashcat_path = "hashcat"
+use_gpu = true
+hashcat_mask = "?d?d?d?d?d?d?d?d"

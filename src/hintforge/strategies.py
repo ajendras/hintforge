@@ -1,9 +1,10 @@
 """Attack strategy registry and base classes for HintForge.
 
-Provides AIStrategy, DictionaryStrategy, MaskStrategy and a hybrid runner.
+Provides AIStrategy, DictionaryStrategy, MaskStrategy, HashcatStrategy and a hybrid runner.
 Strategies are easily extensible by subclassing BaseStrategy and registering them.
-Combines AI guesses with dictionary words, date masks, leetspeak mutations and
-common password patterns. All candidates are scored, deduplicated and ranked.
+Combines AI guesses with dictionary words, date masks, leetspeak mutations,
+common password patterns and GPU-accelerated hashcat mask/rule attacks.
+All candidates are scored, deduplicated and ranked.
 """
 
 from __future__ import annotations
@@ -13,7 +14,9 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
+from .handlers import _get_hashcat_mode, extract_hash
 from .models import Candidate, Config
+from .utils import run_hashcat
 
 
 class BaseStrategy(ABC):
@@ -35,7 +38,7 @@ class BaseStrategy(ABC):
             hint: Optional user memory/hint to guide generation.
             candidates: Existing candidates to augment (for hybrid).
             config: Runtime configuration.
-            **kwargs: Strategy-specific parameters.
+            **kwargs: Strategy-specific parameters (archive_path for hashcat).
 
         Returns:
             List of Candidate objects sorted by descending score.
@@ -218,6 +221,88 @@ class MaskStrategy(BaseStrategy):
         return merged[: config.max_candidates * 2]
 
 
+class HashcatStrategy(BaseStrategy):
+    """GPU-accelerated mask and rule attacks via hashcat.
+
+    Extracts a hash using JohnTheRipper utilities then runs hashcat.
+    Returns high-confidence cracked candidates (score = 0.95).
+    Falls back gracefully when tools are unavailable.
+    """
+
+    name: str = "hashcat"
+
+    def run(
+        self,
+        hint: str | None = None,
+        candidates: list[Candidate] | None = None,
+        config: Config | None = None,
+        **kwargs: Any,
+    ) -> list[Candidate]:
+        if candidates is None:
+            candidates = []
+        config = config or Config()
+        archive_path = kwargs.get("archive_path")
+        if not archive_path:
+            return candidates
+
+        try:
+            hash_file = extract_hash(archive_path)
+            fmt = Path(archive_path).suffix.lower().strip(".") or "zip"
+            mode = config.hashcat_mode or _get_hashcat_mode(fmt)
+
+            masks = [config.hashcat_mask or "?d?d?d?d?d?d?d?d"]
+            if hint:
+                if re.search(r"\d{4}", hint):
+                    masks.append("?d?d?d?d")
+                masks.extend(["?u?l?l?l?d?d?d?", "?d?d?u?l?l?l?d?d"])
+
+            cracked = None
+            for mask in masks[:3]:
+                cracked = run_hashcat(
+                    hash_file=hash_file,
+                    mode=mode,
+                    attack_mode=3,
+                    mask=mask,
+                    config=config,
+                )
+                if cracked:
+                    break
+
+            if cracked:
+                hc_candidate = Candidate(
+                    score=0.95,
+                    value=cracked,
+                    metadata={"source": "hashcat", "mask": mask, "mode": mode},
+                )
+                candidates.append(hc_candidate)
+
+            # Optional rule-based attack when a rules file is configured
+            if config.hashcat_rules and Path(config.hashcat_rules).exists():
+                rule_cracked = run_hashcat(
+                    hash_file=hash_file,
+                    mode=mode,
+                    attack_mode=0,
+                    rules_file=config.hashcat_rules,
+                    config=config,
+                )
+                if rule_cracked and rule_cracked != cracked:
+                    candidates.append(
+                        Candidate(
+                            score=0.90,
+                            value=rule_cracked,
+                            metadata={"source": "hashcat_rule"},
+                        )
+                    )
+
+            # Cleanup temporary hash file
+            Path(hash_file).unlink(missing_ok=True)
+
+        except Exception:  # hashcat or extraction unavailable -> silent fallback
+            pass
+
+        return sorted(candidates, key=lambda c: c.score, reverse=True)[: config.max_candidates]
+
+
 def run_strategy(
     strategy: str = "hybrid",
     candidates: list[Candidate] | None = None,
@@ -228,13 +313,14 @@ def run_strategy(
 ) -> list[Candidate]:
     """Public entrypoint to run a named strategy or hybrid combination.
 
-    Hybrid runs AI → Dictionary → Mask in sequence, merges results,
-    removes duplicates (keeping highest score) and returns the top N candidates.
+    Hybrid runs AI → Dictionary → Mask → Hashcat (GPU) in sequence,
+    merges results, removes duplicates (keeping highest score) and
+    returns the top N candidates.
 
     Args:
-        strategy: One of "ai", "dictionary", "mask", "hybrid", "ai_mask_dictionary".
+        strategy: One of "ai", "dictionary", "mask", "hashcat", "hybrid".
         candidates: Seed candidates (used by hybrid).
-        archive_path: Archive path (reserved for future context-aware strategies).
+        archive_path: Archive path (required for hashcat).
         config: Configuration object.
         hint: User-provided contextual memory.
         **kwargs: Passed through to concrete strategies.
@@ -263,6 +349,15 @@ def run_strategy(
             hint=hint, candidates=candidates, config=config, **kwargs
         )
 
+    if strategy == "hashcat":
+        return HashcatStrategy().run(
+            hint=hint,
+            candidates=candidates,
+            config=config,
+            archive_path=archive_path,
+            **kwargs,
+        )
+
     # Hybrid strategies combine multiple generators
     if strategy in ("hybrid", "ai_hybrid", "ai_mask_dictionary"):
         # AI first if hint supplied and we have no candidates yet
@@ -284,6 +379,16 @@ def run_strategy(
             hint=hint, candidates=candidates, config=config, **kwargs
         )
 
+        # GPU hashcat (mask + optional rule) when enabled
+        if "hashcat" in [s.lower() for s in config.enabled_strategies]:
+            candidates = HashcatStrategy().run(
+                hint=hint,
+                candidates=candidates,
+                config=config,
+                archive_path=archive_path,
+                **kwargs,
+            )
+
     # Final ranking + limit
     seen: dict[str, float] = {}
     unique: list[Candidate] = []
@@ -303,6 +408,7 @@ def get_strategy(name: str) -> BaseStrategy:
         "ai": AIStrategy,
         "dictionary": DictionaryStrategy,
         "mask": MaskStrategy,
+        "hashcat": HashcatStrategy,
     }
     if name not in registry:
         raise ValueError(
@@ -317,6 +423,7 @@ __all__ = [
     "AIStrategy",
     "DictionaryStrategy",
     "MaskStrategy",
+    "HashcatStrategy",
     "run_strategy",
     "get_strategy",
 ]

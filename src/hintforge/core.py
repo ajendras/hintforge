@@ -18,7 +18,7 @@ from .models import Candidate, Config, SessionState
 from .oracle import generate_candidates
 from .strategies import run_strategy
 from .tester import try_password
-from .utils import brutalist_panel, load_config, save_session, sanitize_password
+from .utils import brutalist_panel, is_hashcat_available, load_config, save_session, sanitize_password
 
 console = Console(highlight=False, color_system="truecolor")
 
@@ -63,7 +63,8 @@ def analyze(archive_path: str, forced_format: str | None = None) -> dict[str, An
     """Analyze encryption strength of an archive and recommend an attack strategy.
 
     Uses file magic/extension and basic header inspection. Returns a report
-    compatible with the CLI analysis table. Now includes Office (docx/xlsx).
+    compatible with the CLI analysis table. Now includes Office (docx/xlsx)
+    and hashcat availability.
     """
     if not Path(archive_path).exists():
         raise FileNotFoundError(f"Archive not found: {archive_path}")
@@ -95,10 +96,10 @@ def analyze(archive_path: str, forced_format: str | None = None) -> dict[str, An
     encryption = encryption_map.get(fmt, "Unknown")
 
     recommended = "ai_hybrid"
-    if strength > 8.5:
+    if strength > 8.5 or fmt in ("7z", "rar"):
+        recommended = "hashcat"
+    elif strength > 7.0:
         recommended = "ai_mask_dictionary"
-    elif fmt in ("pdf", "office"):
-        recommended = "ai"
 
     return {
         "format": fmt.upper(),
@@ -108,6 +109,7 @@ def analyze(archive_path: str, forced_format: str | None = None) -> dict[str, An
         "recommended_strategy": recommended,
         "supports_ai": True,
         "supports_resume": True,
+        "hashcat_available": is_hashcat_available(),
     }
 
 
@@ -124,7 +126,7 @@ def recover(
 
     1. Load/merge session (if resuming)
     2. Generate AI candidates via Oracle
-    3. Augment with pluggable strategies (dictionary, mask, rules)
+    3. Augment with pluggable strategies (dictionary, mask, hashcat GPU)
     4. Rank by likelihood
     5. Test candidates in order using format-specific handlers
     6. Provide live brutalist progress UI
@@ -157,13 +159,14 @@ def recover(
             console.print(f"[#ff0044]Oracle failed: {exc}[/#ff0044]")
             ai_candidates = []
 
-        # Run hybrid strategies (dictionary + mask expansion)
+        # Run hybrid strategies (dictionary + mask + hashcat GPU)
         try:
             augmented = run_strategy(
                 strategy="hybrid",
                 candidates=ai_candidates,
                 archive_path=archive_path,
                 config=config,
+                hint=hint,
             )
         except Exception:  # strategy registry may be incomplete
             augmented = ai_candidates

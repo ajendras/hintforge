@@ -65,8 +65,8 @@ class Config(BaseModel):
     )
     top_p: float = Field(default=0.9, ge=0.0, le=1.0)
     enabled_strategies: list[str] = Field(
-        default_factory=lambda: ["ai", "dictionary", "mask"],
-        description="Strategies to run in hybrid mode.",
+        default_factory=lambda: ["ai", "dictionary", "mask", "hashcat"],
+        description="Strategies used in hybrid mode.",
     )
     dictionary_path: str | None = Field(
         default=None,
@@ -79,6 +79,26 @@ class Config(BaseModel):
         description="Discard candidates below this score.",
     )
     dry_run: bool = False
+    hashcat_path: str = Field(
+        default="hashcat",
+        description="Path or name of the hashcat executable.",
+    )
+    use_gpu: bool = Field(
+        default=True,
+        description="Use GPU devices for hashcat (-D 2).",
+    )
+    hashcat_mask: str | None = Field(
+        default="?d?d?d?d?d?d?d?d",
+        description="Default mask for hashcat mask attacks.",
+    )
+    hashcat_rules: str | None = Field(
+        default=None,
+        description="Optional rules file for hashcat rule attacks.",
+    )
+    hashcat_mode: int | None = Field(
+        default=None,
+        description="Override hashcat -m mode (auto-detected from format).",
+    )
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 

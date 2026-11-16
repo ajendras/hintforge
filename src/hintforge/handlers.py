@@ -9,9 +9,11 @@ Raises clear errors on bad passwords.
 from __future__ import annotations
 
 import contextlib
+import subprocess
 import tarfile
 import zipfile
 from pathlib import Path
+from shutil import which
 from typing import Any, Iterator
 
 import pikepdf
@@ -225,4 +227,58 @@ def open_with_password(
         raise RuntimeError(f"Failed to open {archive_path} as {fmt}: {exc}") from exc
 
 
-__all__ = ["detect_format", "open_with_password", "PasswordError"]
+def _get_hashcat_mode(fmt: str) -> int:
+    """Map internal format identifier to the corresponding hashcat -m mode."""
+    mode_map = {
+        "zip": 17200,
+        "rar": 13000,
+        "7z": 11600,
+        "pdf": 10500,
+        "office": 9710,
+        "tar": 16000,
+    }
+    return mode_map.get(fmt.lower(), 17200)
+
+
+def extract_hash(archive_path: str, forced_format: str | None = None) -> str:
+    """Extract hash using JohnTheRipper *2john utilities for hashcat.
+
+    Returns path to a temporary .hash file containing the extracted hash.
+    Requires the corresponding tool (zip2john, rar2john, etc.) to be installed
+    and available in PATH.
+    """
+    fmt = forced_format or detect_format(archive_path)
+    hash_path = str(Path(archive_path).with_suffix(".hash"))
+    tool_map = {
+        "zip": "zip2john",
+        "rar": "rar2john",
+        "7z": "7z2john.pl",
+        "pdf": "pdf2john",
+        "office": "office2john",
+        "tar": "tar2john",
+    }
+    tool = tool_map.get(fmt)
+    if not tool:
+        raise ValueError(f"Hash extraction not supported for format '{fmt}'")
+
+    try:
+        result = subprocess.run(
+            [tool, archive_path],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=15,
+        )
+        Path(hash_path).write_text(result.stdout.strip())
+        return hash_path
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"{tool} not found. Please install JohnTheRipper (provides zip2john, rar2john, ...)."
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"Hash extraction failed: {exc.stderr or str(exc)}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("Hash extraction timed out") from exc
+
+
+__all__ = ["detect_format", "open_with_password", "PasswordError", "extract_hash"]

@@ -24,10 +24,11 @@
 People regularly forget passwords to their own archives. Brute-force and plain dictionary attacks are too slow or ineffective against modern encryption. HintForge fills the gap by using a local LLM (via Ollama) to convert vague user memories like "my dog + birth year" into intelligently ranked password candidates.
 
 - **Context Oracle**: `generate_candidates()` turns natural-language hints into high-probability candidates using local models
-- **Hybrid intelligence**: Combines AI guesses with `DictionaryStrategy`, `MaskStrategy` and rules before testing
+- **Hybrid intelligence**: Combines AI guesses with `DictionaryStrategy`, `MaskStrategy`, `HashcatStrategy` (GPU) and rules before testing
 - **Multi-format support**: Native handling for ZIP, RAR, PDF, 7z, TAR and Office (DOCX/XLSX) via `handlers.detect_format()` and `open_with_password()`
 - **Safe & resumable**: Dry-run mode, non-destructive `try_password()`, session checkpoints in `.hintforge/`, and strength analysis
 - **Brutalist live UI**: Real-time progress, ETA and chunky neo-brutalist panels built with Rich
+- **GPU acceleration**: Optional Hashcat integration for mask and rule attacks when JohnTheRipper + hashcat are available
 
 ## 🎬 Demo
 
@@ -47,7 +48,7 @@ Native support for ZIP, RAR, PDF, 7z, TAR and Office (DOCX/XLSX) documents
 </td>
 <td>
 🔀 <b>Hybrid Attacks</b><br>
-<code>run_strategy("hybrid")</code> merges AI, dictionary and mask candidates
+<code>run_strategy("hybrid")</code> merges AI, dictionary, mask and GPU hashcat candidates
 </td>
 </tr>
 <tr>
@@ -61,7 +62,7 @@ Neo-brutalist Rich UI with ETA, rate and chunky panels
 </td>
 <td>
 🧩 <b>Pluggable Strategies</b><br>
-Easy-to-extend <code>BaseStrategy</code> subclasses and registry
+Easy-to-extend <code>BaseStrategy</code> subclasses and registry (now with HashcatStrategy)
 </td>
 </tr>
 <tr>
@@ -75,7 +76,13 @@ Checkpoint/restore with <code>SessionState</code> JSON files
 </td>
 <td>
 🔎 <b>Strength Analyzer</b><br>
-<code>analyze()</code> reports encryption strength and recommends strategy
+<code>analyze()</code> reports encryption strength and recommends strategy (including hashcat)
+</td>
+</tr>
+<tr>
+<td colspan="3">
+🔬 <b>GPU Acceleration</b><br>
+Hashcat integration (mask + rule attacks) via <code>HashcatStrategy</code> when <code>hashcat</code> and JohnTheRipper <code>*2john</code> tools are installed
 </td>
 </tr>
 </table>
@@ -87,6 +94,8 @@ Requires Python 3.9+ and a running Ollama instance with a model such as `llama3`
 ```bash
 pip install git+https://github.com/ajendras/hintforge.git
 ollama pull llama3
+# Optional but recommended for GPU attacks:
+# sudo apt install hashcat john  # or equivalent for your OS
 ```
 
 The CLI is automatically installed via the `hintforge` entrypoint defined in `pyproject.toml`.
@@ -136,6 +145,8 @@ hintforge recover documents.zip \
   --resume
 ```
 
+When `hashcat` and JohnTheRipper tools are present and `hashcat` is listed in `enabled_strategies`, the hybrid pipeline automatically runs GPU-accelerated mask and rule attacks after the CPU strategies.
+
 <details><summary>Advanced: custom config and strategy control</summary>
 
 Create a `config.toml` (loaded by `utils.load_config()`):
@@ -144,8 +155,10 @@ Create a `config.toml` (loaded by `utils.load_config()`):
 model = "llama3"
 max_candidates = 100
 temperature = 0.7
-enabled_strategies = ["ai", "dictionary", "mask"]
+enabled_strategies = ["ai", "dictionary", "mask", "hashcat"]
 min_score_threshold = 0.3
+use_gpu = true
+hashcat_mask = "?d?d?d?d?d?d?d?d"
 ```
 
 Then run a hybrid strategy directly from Python:
@@ -154,14 +167,15 @@ Then run a hybrid strategy directly from Python:
 from hintforge import run_strategy, Candidate, Config
 from hintforge.models import Candidate
 
-config = Config(max_candidates=50, model="llama3")
+config = Config(max_candidates=50, model="llama3", enabled_strategies=["ai", "hashcat"])
 seed = [Candidate(score=0.9, value="Max2019!")]
 
 candidates = run_strategy(
     strategy="hybrid",
     hint="our dog max vacation 2019",
     candidates=seed,
-    config=config
+    config=config,
+    archive_path="protected.rar"
 )
 print([c.value for c in candidates[:5]])
 ```
@@ -175,9 +189,12 @@ print([c.value for c in candidates[:5]])
 | max_candidates        | 75          | Maximum candidates to generate and test          |
 | temperature           | 0.75        | LLM temperature for candidate diversity          |
 | top_p                 | 0.9         | Nucleus sampling parameter                       |
-| enabled_strategies    | ["ai", "dictionary", "mask"] | Strategies used in hybrid mode |
+| enabled_strategies    | ["ai", "dictionary", "mask", "hashcat"] | Strategies used in hybrid mode |
 | dictionary_path       | None        | Optional custom wordlist path                    |
 | min_score_threshold   | 0.25        | Discard candidates below this score              |
+| hashcat_path          | hashcat     | Path to hashcat binary                           |
+| use_gpu               | true        | Use GPU devices (-D 2) for hashcat               |
+| hashcat_mask          | ?d?d?d?d?d?d?d?d | Default mask for mask-mode attacks          |
 
 All values are defined in `models.Config` and loaded from `config.toml` by `utils.load_config()`.
 
@@ -192,11 +209,14 @@ flowchart TD
     Strategies --> AIStrategy[AIStrategy]
     Strategies --> DictionaryStrategy[DictionaryStrategy]
     Strategies --> MaskStrategy[MaskStrategy]
+    Strategies --> HashcatStrategy[HashcatStrategy<br>GPU mask/rule]
     Core --> Tester[tester.py<br>try_password()]
-    Tester --> Handlers[handlers.py<br>detect_format() + open_with_password()]
+    Tester --> Handlers[handlers.py<br>detect_format() + open_with_password() + extract_hash()]
     Core --> Session[(SessionState<br>.hintforge/*.json)]
-    Core --> Utils[utils.py<br>brutalist UI + config]
+    Core --> Utils[utils.py<br>brutalist UI + config + run_hashcat()]
     Handlers --> ZIP[RAR/PDF/7z/TAR/OFFICE handlers]
+    Handlers --> John[JohnTheRipper *2john tools]
+    Strategies --> Hashcat[hashcat binary (GPU)]
 ```
 
 The orchestrator in `core.py` coordinates the Context Oracle, pluggable strategies, tester facade and session persistence. All data flows through Pydantic `Candidate` and `Config` models, keeping the pipeline type-safe, resumable and easy to extend.
@@ -212,14 +232,14 @@ The orchestrator in `core.py` coordinates the Context Oracle, pluggable strategi
 │   ├── cli.py                     # Click commands + neo-brutalist Rich UI (_brutalist_header, HEAVY boxes)
 │   ├── core.py                    # Orchestrator: recover(), analyze(), session handling
 │   ├── oracle.py                  # Ollama integration, JSON parsing, _parse_llm_response()
-│   ├── strategies.py              # BaseStrategy, AIStrategy, DictionaryStrategy, MaskStrategy, run_strategy()
+│   ├── strategies.py              # BaseStrategy, AIStrategy, DictionaryStrategy, MaskStrategy, HashcatStrategy, run_strategy()
 │   ├── tester.py                  # try_password(), format-specific _test_* helpers
-│   ├── handlers.py                # detect_format(), open_with_password(), PasswordError (now with Office)
+│   ├── handlers.py                # detect_format(), open_with_password(), extract_hash(), PasswordError (now with Office)
 │   ├── models.py                  # Pydantic models: Candidate, Config, SessionState, Job
-│   └── utils.py                   # load_config(), save_session(), brutalist_panel(), sanitize_password()
+│   └── utils.py                   # load_config(), save_session(), brutalist_panel(), sanitize_password(), run_hashcat()
 ├── tests/
 │   ├── test_oracle.py             # Mocked Ollama responses and scoring tests
-│   └── test_tester.py             # Unit + integration tests with fixture archives
+│   └── test_tester.py             # Unit + integration tests with fixture archives (now includes hashcat mocks)
 ├── examples/recovery_demo.py      # Runnable full-workflow example with test RAR
 └── LICENSE
 ```
@@ -230,14 +250,14 @@ The orchestrator in `core.py` coordinates the Context Oracle, pluggable strategi
 pytest -q
 ```
 
-Tests cover candidate generation (mocked Ollama in `test_oracle.py`), password testing with real fixture archives (`test_tester.py`), core orchestration, strategy merging, format detection and session serialization. Run with the `[test]` extra.
+Tests cover candidate generation (mocked Ollama in `test_oracle.py`), password testing with real fixture archives (`test_tester.py`), core orchestration, strategy merging, format detection, hash extraction and session serialization. Run with the `[test]` extra.
 
 ## 📍 Roadmap
 
 <!-- roadmap:start -->
 - [x] **v0.1.0** — first release: Context Oracle, Multi-Format, Hybrid Attacks, Likelihood Ranking
 - [x] Add Office document (docx/xlsx) handlers
-- [ ] Hashcat integration for GPU-accelerated mask and rule attacks
+- [x] Hashcat integration for GPU-accelerated mask and rule attacks
 - [ ] Simple brutalist web dashboard for job monitoring
 - [ ] Auto-extract context from filename, nearby files and EXIF
 - [ ] Session export/import for sharing recovery state
