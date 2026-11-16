@@ -89,10 +89,10 @@ Hashcat integration (mask + rule attacks) via <code>HashcatStrategy</code> when 
 
 ## 📦 Installation
 
-Requires Python 3.9+ and a running Ollama instance with a model such as `llama3`.
+Requires Python 3.9+ and a running Ollama instance (e.g. `llama3`). Office (docx/xlsx) support is available via the `[office]` extra.
 
 ```bash
-pip install git+https://github.com/ajendras/hintforge.git
+pip install "git+https://github.com/ajendras/hintforge.git#egg=hintforge[office]"
 ollama pull llama3
 # Optional but recommended for GPU attacks:
 # sudo apt install hashcat john  # or equivalent for your OS

@@ -20,7 +20,8 @@ import pikepdf
 import py7zr
 import rarfile
 
-# msoffcrypto is an optional dependency (no compatible release for Python 3.12+ yet)
+# msoffcrypto is provided by the optional 'office' extra
+# (no compatible release for Python 3.12+ yet)
 try:
     import msoffcrypto
     from msoffcrypto.exceptions import DecryptionError
