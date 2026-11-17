@@ -92,7 +92,7 @@ def _parse_llm_response(text: str, requested_count: int) -> list[Candidate]:
                 candidates.append(Candidate(score=score, value=pw))
 
     # If still empty, create synthetic candidates from the hint itself
-    if not candidates and hint := re.sub(r"[^A-Za-z0-9 ]", "", text.lower()):
+    if not candidates and (hint := re.sub(r"[^A-Za-z0-9 ]", "", text.lower())):
         words = hint.split()[:5]
         base = "".join(words)
         synthetic = [
