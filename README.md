@@ -29,6 +29,7 @@ People regularly forget passwords to their own archives. Brute-force and plain d
 - **Safe & resumable**: Dry-run mode, non-destructive `try_password()`, session checkpoints in `.hintforge/`, and strength analysis
 - **Brutalist live UI**: Real-time progress, ETA and chunky neo-brutalist panels built with Rich
 - **GPU acceleration**: Optional Hashcat integration for mask and rule attacks when JohnTheRipper + hashcat are available
+- **Web Dashboard**: Simple neo-brutalist Flask UI for launching and monitoring multiple recovery jobs
 
 ## 🎬 Demo
 
@@ -85,14 +86,20 @@ Checkpoint/restore with <code>SessionState</code> JSON files
 Hashcat integration (mask + rule attacks) via <code>HashcatStrategy</code> when <code>hashcat</code> and JohnTheRipper <code>*2john</code> tools are installed
 </td>
 </tr>
+<tr>
+<td colspan="3">
+🌐 <b>Web Dashboard</b><br>
+Simple neo-brutalist Flask UI (<code>hintforge dashboard</code>) for job creation, live monitoring and chunky progress
+</td>
+</tr>
 </table>
 
 ## 📦 Installation
 
-Requires Python 3.9+ and a running Ollama instance (e.g. `llama3`). Office (docx/xlsx) support is available via the `[office]` extra.
+Requires Python 3.9+ and a running Ollama instance (e.g. `llama3`). Office (docx/xlsx) support is available via the `[office]` extra. The web dashboard is available via the `[web]` extra.
 
 ```bash
-pip install "git+https://github.com/ajendras/hintforge.git#egg=hintforge[office]"
+pip install "git+https://github.com/ajendras/hintforge.git#egg=hintforge[office,web]"
 ollama pull llama3
 # Optional but recommended for GPU attacks:
 # sudo apt install hashcat john  # or equivalent for your OS
@@ -104,6 +111,13 @@ The CLI is automatically installed via the `hintforge` entrypoint defined in `py
 
 ```bash
 hintforge recover archive.rar --hint "vacation 2022 and pet name" --model llama3
+```
+
+Or launch the brutalist web dashboard:
+
+```bash
+hintforge dashboard
+# Open http://localhost:5000 in your browser
 ```
 
 Or use the Python API exposed in `src/hintforge/__init__.py`:
@@ -143,6 +157,12 @@ hintforge recover documents.zip \
   --hint "our wedding year and dogs name" \
   --max-candidates 120 \
   --resume
+```
+
+Start the web dashboard (opens a neo-brutalist monitoring interface):
+
+```bash
+hintforge dashboard --port 8080
 ```
 
 When `hashcat` and JohnTheRipper tools are present and `hashcat` is listed in `enabled_strategies`, the hybrid pipeline automatically runs GPU-accelerated mask and rule attacks after the CPU strategies.
@@ -202,7 +222,7 @@ All values are defined in `models.Config` and loaded from `config.toml` by `util
 
 ```mermaid
 flowchart TD
-    CLI[cli.py<br>recover / analyze / generate] --> Core[core.py<br>recover() + analyze()]
+    CLI[cli.py<br>recover / analyze / generate / dashboard] --> Core[core.py<br>recover() + analyze() + job orchestration]
     Core --> Oracle[oracle.py<br>generate_candidates()]
     Oracle --> Ollama[(Ollama<br>llama3)]
     Core --> Strategies[strategies.py<br>run_strategy("hybrid")]
@@ -213,13 +233,16 @@ flowchart TD
     Core --> Tester[tester.py<br>try_password()]
     Tester --> Handlers[handlers.py<br>detect_format() + open_with_password() + extract_hash()]
     Core --> Session[(SessionState<br>.hintforge/*.json)]
-    Core --> Utils[utils.py<br>brutalist UI + config + run_hashcat()]
+    Core --> Jobs[(Job<br>.hintforge/job-*.json)]
+    Core --> Dashboard[dashboard.py<br>Flask brutalist UI]
+    Core --> Utils[utils.py<br>load_config() + brutalist_panel() + run_hashcat() + job persistence]
     Handlers --> ZIP[RAR/PDF/7z/TAR/OFFICE handlers]
     Handlers --> John[JohnTheRipper *2john tools]
     Strategies --> Hashcat[hashcat binary (GPU)]
+    Dashboard --> Browser[(Browser<br>neo-brutalist UI)]
 ```
 
-The orchestrator in `core.py` coordinates the Context Oracle, pluggable strategies, tester facade and session persistence. All data flows through Pydantic `Candidate` and `Config` models, keeping the pipeline type-safe, resumable and easy to extend.
+The orchestrator in `core.py` coordinates the Context Oracle, pluggable strategies, tester facade and session persistence. All data flows through Pydantic `Candidate` and `Config` models, keeping the pipeline type-safe, resumable and easy to extend. The new dashboard provides a web front-end for job management using the same models.
 
 ## 📁 Project structure
 
@@ -228,15 +251,16 @@ The orchestrator in `core.py` coordinates the Context Oracle, pluggable strategi
 ├── pyproject.toml                 # Metadata, dependencies, console_scripts entrypoint
 ├── config.toml                    # Default model, temperature, strategies, paths
 ├── src/hintforge/
-│   ├── __init__.py                # Public API: recover, analyze, generate_candidates, run_strategy, Candidate
+│   ├── __init__.py                # Public API: recover, analyze, generate_candidates, run_strategy, Candidate, Job, run_dashboard
 │   ├── cli.py                     # Click commands + neo-brutalist Rich UI (_brutalist_header, HEAVY boxes)
-│   ├── core.py                    # Orchestrator: recover(), analyze(), session handling
+│   ├── core.py                    # Orchestrator: recover(), analyze(), session handling + job management
 │   ├── oracle.py                  # Ollama integration, JSON parsing, _parse_llm_response()
 │   ├── strategies.py              # BaseStrategy, AIStrategy, DictionaryStrategy, MaskStrategy, HashcatStrategy, run_strategy()
 │   ├── tester.py                  # try_password(), format-specific _test_* helpers
 │   ├── handlers.py                # detect_format(), open_with_password(), extract_hash(), PasswordError (now with Office)
-│   ├── models.py                  # Pydantic models: Candidate, Config, SessionState, Job
-│   └── utils.py                   # load_config(), save_session(), brutalist_panel(), sanitize_password(), run_hashcat()
+│   ├── models.py                  # Pydantic models: Candidate, Config, SessionState, Job (enhanced for dashboard)
+│   ├── utils.py                   # load_config(), save_session(), brutalist_panel(), sanitize_password(), run_hashcat(), load_jobs(), save_job()
+│   └── dashboard.py               # Brutalist Flask web UI + job creation/monitoring
 ├── tests/
 │   ├── test_oracle.py             # Mocked Ollama responses and scoring tests
 │   └── test_tester.py             # Unit + integration tests with fixture archives (now includes hashcat mocks)
@@ -258,7 +282,7 @@ Tests cover candidate generation (mocked Ollama in `test_oracle.py`), password t
 - [x] **v0.1.0** — first release: Context Oracle, Multi-Format, Hybrid Attacks, Likelihood Ranking
 - [x] Add Office document (docx/xlsx) handlers
 - [x] Hashcat integration for GPU-accelerated mask and rule attacks
-- [ ] Simple brutalist web dashboard for job monitoring
+- [x] Simple brutalist web dashboard for job monitoring
 - [ ] Auto-extract context from filename, nearby files and EXIF
 - [ ] Session export/import for sharing recovery state
 - [ ] Built-in password strength estimator with crack-time projection

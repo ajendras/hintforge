@@ -6,6 +6,8 @@ All models include input validation and helpful error messages.
 
 from __future__ import annotations
 
+import uuid
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -133,15 +135,29 @@ class SessionState(BaseModel):
 
 
 class Job(BaseModel):
-    """Represents a complete recovery job (used by future job queue)."""
+    """Represents a complete recovery job (used by the web dashboard)."""
 
+    id: str = Field(
+        default_factory=lambda: uuid.uuid4().hex[:8],
+        description="Short unique job identifier",
+    )
     archive_path: str
     hint: str
     config: Config
     session: SessionState | None = None
-    status: str = Field(default="pending", pattern="^(pending|running|done|failed)$")
+    status: str = Field(
+        default="pending",
+        pattern="^(pending|running|done|failed)$",
+    )
+    progress: float = Field(default=0.0, ge=0.0, le=1.0)
     result: str | None = None
     error: str | None = None
+    created_at: str = Field(
+        default_factory=lambda: datetime.now().isoformat(),
+    )
+    updated_at: str = Field(
+        default_factory=lambda: datetime.now().isoformat(),
+    )
 
     model_config = ConfigDict(extra="forbid")
 

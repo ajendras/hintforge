@@ -6,10 +6,11 @@ for encrypted ZIP, RAR, PDF, 7z and TAR archives.
 
 from __future__ import annotations
 
-from .models import Candidate
+from .models import Candidate, Job
 from .oracle import generate_candidates
-from .core import recover, analyze
+from .core import recover, analyze, create_job, get_job, start_job_in_background
 from .strategies import run_strategy
+from .dashboard import run_dashboard
 
 __version__ = "0.1.0"
 __all__ = [
@@ -17,7 +18,12 @@ __all__ = [
     "analyze",
     "generate_candidates",
     "run_strategy",
+    "create_job",
+    "get_job",
+    "start_job_in_background",
+    "run_dashboard",
     "Candidate",
+    "Job",
 ]
 
 __author__ = "HintForge Collective"

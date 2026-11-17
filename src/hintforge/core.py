@@ -8,17 +8,27 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime
 from pathlib import Path
+from threading import Thread
 from typing import Any
 
 from rich.console import Console
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 
-from .models import Candidate, Config, SessionState
+from .models import Candidate, Config, SessionState, Job
 from .oracle import generate_candidates
 from .strategies import run_strategy
 from .tester import try_password
-from .utils import brutalist_panel, is_hashcat_available, load_config, save_session, sanitize_password
+from .utils import (
+    brutalist_panel,
+    is_hashcat_available,
+    load_config,
+    load_jobs,
+    save_job,
+    save_session,
+    sanitize_password,
+)
 
 console = Console(highlight=False, color_system="truecolor")
 
@@ -252,4 +262,78 @@ def recover(
     return found
 
 
-__all__ = ["recover", "analyze"]
+def create_job(archive_path: str, hint: str, config: Config | None = None) -> Job:
+    """Create a new recovery job and persist it."""
+    if config is None:
+        config = load_config()
+    job = Job(
+        archive_path=archive_path,
+        hint=hint,
+        config=config,
+        status="pending",
+        progress=0.0,
+    )
+    save_job(job)
+    return job
+
+
+def get_job(job_id: str) -> Job | None:
+    """Retrieve a job by ID (memory or disk)."""
+    jobs_dir = Path(".hintforge")
+    job_file = jobs_dir / f"job-{job_id}.json"
+    if job_file.exists():
+        try:
+            with open(job_file, encoding="utf-8") as f:
+                data = json.load(f)
+            job = Job.model_validate(data)
+            return job
+        except Exception:
+            pass
+    return None
+
+
+def update_job(job: Job) -> None:
+    """Update job metadata and persist."""
+    job.updated_at = datetime.now().isoformat()
+    save_job(job)
+
+
+def run_job(job_id: str) -> None:
+    """Execute a job in background thread (called by dashboard)."""
+    job = get_job(job_id)
+    if not job or job.status != "pending":
+        return
+
+    job.status = "running"
+    job.progress = 0.1
+    update_job(job)
+
+    try:
+        password = recover(
+            archive_path=job.archive_path,
+            hint=job.hint,
+            model=job.config.model,
+            max_candidates=job.config.max_candidates,
+            dry_run=False,
+            resume=True,
+        )
+        if password:
+            job.status = "done"
+            job.result = password
+            job.progress = 1.0
+        else:
+            job.status = "failed"
+            job.error = "No password found in candidate space"
+    except Exception as exc:
+        job.status = "failed"
+        job.error = str(exc)
+
+    update_job(job)
+
+
+def start_job_in_background(job_id: str) -> None:
+    """Launch job execution on a background thread."""
+    Thread(target=run_job, args=(job_id,), daemon=True).start()
+
+
+__all__ = ["recover", "analyze", "create_job", "get_job", "update_job", "start_job_in_background"]

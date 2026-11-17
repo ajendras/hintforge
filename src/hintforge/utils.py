@@ -1,99 +1,108 @@
 """Utility functions for HintForge.
 
-Includes neo-brutalist UI components (Rich panels + chunky ASCII art),
-config loading from config.toml, session persistence helpers,
-password sanitization, and archive metadata utilities.
-
-All UI follows the exact neo-brutalist direction: thick HEAVY borders,
-hard offset visual language via styling, flat bright blocks using
-#ff0044 (hot pink) and #00ff9f (lime), chunky mono-style text, no
-rounding or blur. Loud, playful, high-contrast.
+Includes config loading, session persistence, neo-brutalist UI helpers,
+hashcat runner and job persistence for the web dashboard.
 """
 
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 from pathlib import Path
 from shutil import which
 from typing import Any
 
-try:
-    import tomllib
-except ImportError:
-    tomllib = None  # type: ignore[assignment]
-
+import tomllib
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 from rich import box
 
-from .models import Config, SessionState
+from .models import Config, Job, SessionState
 
-# Neo-brutalist colour palette - used everywhere
-BRUTALIST_PINK = "#ff0044"
-BRUTALIST_LIME = "#00ff9f"
-BRUTALIST_BLACK = "#000000"
 
 console = Console(highlight=False, color_system="truecolor")
 
 
-def sanitize_password(pw: str | bytes) -> str:
-    """Sanitize and normalize a candidate password.
-
-    Strips whitespace, removes control characters, truncates to a
-    reasonable maximum length, and ensures valid UTF-8. Used by
-    tester, core and hashcat integration to avoid encoding issues.
-    """
-    if isinstance(pw, bytes):
-        pw = pw.decode("utf-8", errors="replace")
-    pw = str(pw).strip()
-    pw = re.sub(r"[\x00-\x1F\x7F-\x9F]", "", pw)
-    return pw[:128]
-
-
 def load_config() -> Config:
-    """Load configuration from config.toml (or defaults)."""
+    """Load configuration from config.toml or return defaults."""
+    config = Config()
     config_path = Path("config.toml")
-    if config_path.exists() and tomllib is not None:
+    if config_path.exists():
         try:
             with open(config_path, "rb") as f:
                 data = tomllib.load(f)
-            return Config.model_validate(data)
+            for key, value in data.items():
+                if hasattr(config, key):
+                    setattr(config, key, value)
         except Exception:  # pragma: no cover
-            pass
-    return Config()
+            pass  # fall back to defaults
+    return config
 
 
 def save_session(state: SessionState) -> None:
-    """Persist current recovery state to disk."""
+    """Save session state as JSON for resumability."""
     session_dir = Path(".hintforge")
     session_dir.mkdir(parents=True, exist_ok=True)
     session_file = session_dir / f"{Path(state.archive_path).name}.session.json"
     try:
         with open(session_file, "w", encoding="utf-8") as f:
             f.write(state.model_dump_json(indent=2))
-    except Exception as exc:  # pragma: no cover
-        console.print(f"[dim]Warning: could not save session: {exc}[/]")
+    except Exception:  # pragma: no cover
+        console.print("[dim]Could not save session.[/]")
 
 
-def brutalist_panel(title: str, content: Any, style: str = BRUTALIST_LIME) -> Panel:
-    """Create a chunky neo-brutalist Rich panel with heavy borders."""
-    if not isinstance(content, Text):
-        content = Text(str(content), style=style)
+def save_job(job: Job) -> None:
+    """Persist a Job object to the .hintforge directory."""
+    jobs_dir = Path(".hintforge")
+    jobs_dir.mkdir(parents=True, exist_ok=True)
+    job_file = jobs_dir / f"job-{job.id}.json"
+    try:
+        with open(job_file, "w", encoding="utf-8") as f:
+            f.write(job.model_dump_json(indent=2))
+    except Exception:  # pragma: no cover
+        pass
+
+
+def load_jobs() -> list[Job]:
+    """Load all jobs from disk (used by dashboard)."""
+    jobs_dir = Path(".hintforge")
+    loaded: list[Job] = []
+    if not jobs_dir.exists():
+        return loaded
+    for job_file in jobs_dir.glob("job-*.json"):
+        try:
+            with open(job_file, encoding="utf-8") as f:
+                data = json.load(f)
+            job = Job.model_validate(data)
+            loaded.append(job)
+        except Exception:
+            continue
+    return sorted(loaded, key=lambda j: j.created_at, reverse=True)
+
+
+def brutalist_panel(title: str, content: Any, style: str = "#00ff9f") -> Panel:
+    """Create a chunky neo-brutalist Rich panel matching the CLI aesthetic."""
+    text = Text(str(content), style=style)
     return Panel(
-        content,
-        title=Text(title.upper(), style="bold white"),
+        text,
+        title=f"[bold #ff0044]{title}[/]",
         box=box.HEAVY,
-        border_style=BRUTALIST_PINK,
-        padding=(1, 3),
-        title_align="center",
+        border_style="#ff0044",
+        padding=(1, 4),
+        title_align="left",
     )
 
 
+def sanitize_password(pw: str) -> str:
+    """Sanitize password for safe display (used in UI)."""
+    if not pw or len(pw) < 4:
+        return pw
+    return pw[:4] + "●" * (len(pw) - 4)
+
+
 def is_hashcat_available() -> bool:
-    """Return True if the hashcat binary is available in PATH."""
+    """Check if hashcat binary is available in PATH."""
     return which("hashcat") is not None
 
 
@@ -105,58 +114,53 @@ def run_hashcat(
     rules_file: str | None = None,
     config: Config | None = None,
 ) -> str | None:
-    """Execute hashcat with the supplied parameters and parse the potfile.
+    """Execute hashcat and parse first cracked candidate.
 
-    Returns the first cracked password (if any) or None. Uses a short
-    timeout so the main pipeline is not blocked. GPU is preferred when
-    configured.
+    Returns the first password found or None.
     """
-    if config is None:
-        config = Config()
-    hc_bin = which("hashcat")
-    if not hc_bin:
-        return None
-    potfile = Path(".hintforge") / "hashcat.potfile"
-    potfile.parent.mkdir(parents=True, exist_ok=True)
-    if potfile.exists():
-        potfile.unlink(missing_ok=True)
-
-    cmd: list[str] = [
-        hc_bin,
+    config = config or Config()
+    cmd = [
+        config.hashcat_path,
+        "--quiet",
         "-m",
         str(mode),
         "-a",
         str(attack_mode),
-        "--potfile-path",
-        str(potfile),
-        "--quiet",
-        "--session",
-        "hintforge",
+        hash_file,
     ]
-    if config.use_gpu:
-        cmd.extend(["-D", "2", "--force"])
-    if mask and attack_mode in (3, 6):
+    if mask and attack_mode == 3:
         cmd.append(mask)
-    if rules_file and attack_mode == 0:
+    if rules_file and attack_mode == 0 and rules_file:
         cmd.extend(["-r", rules_file])
-    cmd.append(hash_file)
+    if config.use_gpu:
+        cmd.extend(["-D", "2"])
 
     try:
-        subprocess.run(
+        result = subprocess.run(
             cmd,
             capture_output=True,
-            timeout=30,
+            text=True,
+            timeout=60,
             check=False,
         )
-        if potfile.exists():
-            with open(potfile, encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    if ":" in line:
-                        password = line.split(":", 1)[1].strip()
-                        if password:
-                            return sanitize_password(password)
-    except subprocess.TimeoutExpired:
-        pass
-    except Exception:
+        lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        for line in lines:
+            if ":" in line:
+                return line.split(":", 1)[-1].strip()
+        if lines:
+            return lines[0]
+    except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
         pass
     return None
+
+
+__all__ = [
+    "load_config",
+    "save_session",
+    "save_job",
+    "load_jobs",
+    "brutalist_panel",
+    "sanitize_password",
+    "is_hashcat_available",
+    "run_hashcat",
+]

@@ -330,5 +330,40 @@ def generate_cmd(hint: str, count: int, model: str, min_score: float) -> None:
         sys.exit(1)
 
 
+@cli.command(name="dashboard")
+@click.option(
+    "--port",
+    "-p",
+    default=5000,
+    type=int,
+    help="Port for the web dashboard",
+    show_default=True,
+)
+@click.option(
+    "--debug",
+    is_flag=True,
+    help="Run Flask in debug mode",
+)
+def dashboard_cmd(port: int, debug: bool) -> None:
+    """Launch the neo-brutalist web dashboard for job monitoring."""
+    _brutalist_header(
+        "DASHBOARD ONLINE",
+        f"http://localhost:{port} • Brutalist Job Monitor",
+    )
+    console.print("Starting Flask server... Press Ctrl+C to stop.\n")
+    try:
+        from .dashboard import run_dashboard
+        run_dashboard(port=port, debug=debug)
+    except Exception as exc:  # noqa: BLE001
+        console.print(
+            Panel(
+                Text(f"DASHBOARD FAILURE\n{exc!s}", style="bold #ff0044"),
+                box=box.HEAVY,
+                border_style="#ff0044",
+            )
+        )
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     cli()
