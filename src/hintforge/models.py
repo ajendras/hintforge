@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 
 class Candidate(BaseModel):
@@ -125,13 +125,17 @@ class SessionState(BaseModel):
     model_config = ConfigDict(
         arbitrary_types_allowed=True,
         extra="forbid",
-        json_encoders={set: list},
     )
 
     def mark_tested(self, password: str) -> None:
         """Record a tested password (idempotent)."""
         self.tested.add(password)
         self.candidates_tested += 1
+
+    @field_serializer("tested")
+    def serialize_tested(self, tested: set[str]) -> list[str]:
+        """Serialize set to sorted list for JSON (replaces deprecated json_encoders)."""
+        return sorted(tested)
 
 
 class Job(BaseModel):
