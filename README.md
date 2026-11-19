@@ -24,6 +24,7 @@
 People regularly forget passwords to their own archives. Brute-force and plain dictionary attacks are too slow or ineffective against modern encryption. HintForge fills the gap by using a local LLM (via Ollama) to convert vague user memories like "my dog + birth year" into intelligently ranked password candidates.
 
 - **Context Oracle**: `generate_candidates()` turns natural-language hints into high-probability candidates using local models
+- **Auto Context Extraction**: Pulls keywords from filename, nearby files (text/docs) and EXIF/PDF metadata to enrich the prompt automatically
 - **Hybrid intelligence**: Combines AI guesses with `DictionaryStrategy`, `MaskStrategy`, `HashcatStrategy` (GPU) and rules before testing
 - **Multi-format support**: Native handling for ZIP, RAR, PDF, 7z, TAR and Office (DOCX/XLSX) via `handlers.detect_format()` and `open_with_password()`
 - **Safe & resumable**: Dry-run mode, non-destructive `try_password()`, session checkpoints in `.hintforge/`, and strength analysis
@@ -44,15 +45,19 @@ People regularly forget passwords to their own archives. Brute-force and plain d
 Local LLM converts hints into ranked <code>Candidate</code> objects
 </td>
 <td>
+📁 <b>Auto Context</b><br>
+Extracts keywords from filename, nearby files and EXIF/PDF metadata
+</td>
+<td>
 📦 <b>Multi-Format</b><br>
 Native support for ZIP, RAR, PDF, 7z, TAR and Office (DOCX/XLSX) documents
 </td>
+</tr>
+<tr>
 <td>
 🔀 <b>Hybrid Attacks</b><br>
 <code>run_strategy("hybrid")</code> merges AI, dictionary, mask and GPU hashcat candidates
 </td>
-</tr>
-<tr>
 <td>
 📊 <b>Likelihood Ranking</b><br>
 Scores candidates by LLM likelihood before expensive testing
@@ -61,12 +66,12 @@ Scores candidates by LLM likelihood before expensive testing
 📈 <b>Live Progress</b><br>
 Neo-brutalist Rich UI with ETA, rate and chunky panels
 </td>
+</tr>
+<tr>
 <td>
 🧩 <b>Pluggable Strategies</b><br>
 Easy-to-extend <code>BaseStrategy</code> subclasses and registry (now with HashcatStrategy)
 </td>
-</tr>
-<tr>
 <td>
 🛡️ <b>Safe Testing</b><br>
 <code>--dry-run</code> and non-destructive validation via <code>tester.py</code>
@@ -75,13 +80,13 @@ Easy-to-extend <code>BaseStrategy</code> subclasses and registry (now with Hashc
 ⏳ <b>Session Resume</b><br>
 Checkpoint/restore with <code>SessionState</code> JSON files
 </td>
+</tr>
+<tr>
 <td>
 🔎 <b>Strength Analyzer</b><br>
 <code>analyze()</code> reports encryption strength and recommends strategy (including hashcat)
 </td>
-</tr>
-<tr>
-<td colspan="3">
+<td colspan="2">
 🔬 <b>GPU Acceleration</b><br>
 Hashcat integration (mask + rule attacks) via <code>HashcatStrategy</code> when <code>hashcat</code> and JohnTheRipper <code>*2john</code> tools are installed
 </td>
@@ -113,6 +118,8 @@ The CLI is automatically installed via the `hintforge` entrypoint defined in `py
 hintforge recover archive.rar --hint "vacation 2022 and pet name" --model llama3
 ```
 
+HintForge automatically augments your hint with context extracted from the filename, nearby files and any available EXIF/PDF metadata.
+
 Or launch the brutalist web dashboard:
 
 ```bash
@@ -123,7 +130,9 @@ hintforge dashboard
 Or use the Python API exposed in `src/hintforge/__init__.py`:
 
 ```python
-from hintforge import recover
+from hintforge import recover, extract_context
+
+print(extract_context("protected.zip"))  # see auto-extracted terms
 
 password = recover(
     archive_path="protected.zip",
@@ -143,6 +152,8 @@ Generate candidates only (no archive required):
 ```bash
 hintforge generate --hint "family vacation greece 2018" --count 40 --model llama3
 ```
+
+When an `archive_path` is supplied to `generate_candidates()` the hint is automatically augmented with context from the filename, sibling files (.txt/.md content) and EXIF/PDF metadata.
 
 Analyze encryption strength and get a recommendation:
 
@@ -223,8 +234,9 @@ All values are defined in `models.Config` and loaded from `config.toml` by `util
 ```mermaid
 flowchart TD
     CLI[cli.py<br>recover / analyze / generate / dashboard] --> Core[core.py<br>recover() + analyze() + job orchestration]
-    Core --> Oracle[oracle.py<br>generate_candidates()]
+    Core --> Oracle[oracle.py<br>generate_candidates() + extract_context()]
     Oracle --> Ollama[(Ollama<br>llama3)]
+    Oracle --> FS[Filesystem<br>filename + nearby .txt/.md + EXIF/PDF metadata]
     Core --> Strategies[strategies.py<br>run_strategy("hybrid")]
     Strategies --> AIStrategy[AIStrategy]
     Strategies --> DictionaryStrategy[DictionaryStrategy]
@@ -235,14 +247,14 @@ flowchart TD
     Core --> Session[(SessionState<br>.hintforge/*.json)]
     Core --> Jobs[(Job<br>.hintforge/job-*.json)]
     Core --> Dashboard[dashboard.py<br>Flask brutalist UI]
-    Core --> Utils[utils.py<br>load_config() + brutalist_panel() + run_hashcat() + job persistence]
+    Core --> Utils[utils.py<br>load_config() + brutalist_panel() + sanitize_password() + run_hashcat() + job persistence]
     Handlers --> ZIP[RAR/PDF/7z/TAR/OFFICE handlers]
     Handlers --> John[JohnTheRipper *2john tools]
     Strategies --> Hashcat[hashcat binary (GPU)]
     Dashboard --> Browser[(Browser<br>neo-brutalist UI)]
 ```
 
-The orchestrator in `core.py` coordinates the Context Oracle, pluggable strategies, tester facade and session persistence. All data flows through Pydantic `Candidate` and `Config` models, keeping the pipeline type-safe, resumable and easy to extend. The new dashboard provides a web front-end for job management using the same models.
+The orchestrator in `core.py` coordinates the Context Oracle, pluggable strategies, tester facade and session persistence. All data flows through Pydantic `Candidate` and `Config` models, keeping the pipeline type-safe, resumable and easy to extend. The new dashboard provides a web front-end for job management using the same models. `extract_context()` automatically enriches every hint when an `archive_path` is supplied.
 
 ## 📁 Project structure
 
@@ -251,10 +263,10 @@ The orchestrator in `core.py` coordinates the Context Oracle, pluggable strategi
 ├── pyproject.toml                 # Metadata, dependencies, console_scripts entrypoint
 ├── config.toml                    # Default model, temperature, strategies, paths
 ├── src/hintforge/
-│   ├── __init__.py                # Public API: recover, analyze, generate_candidates, run_strategy, Candidate, Job, run_dashboard
+│   ├── __init__.py                # Public API: recover, analyze, generate_candidates, run_strategy, Candidate, Job, run_dashboard, extract_context
 │   ├── cli.py                     # Click commands + neo-brutalist Rich UI (_brutalist_header, HEAVY boxes)
 │   ├── core.py                    # Orchestrator: recover(), analyze(), session handling + job management
-│   ├── oracle.py                  # Ollama integration, JSON parsing, _parse_llm_response()
+│   ├── oracle.py                  # Ollama integration, JSON parsing, _parse_llm_response(), extract_context()
 │   ├── strategies.py              # BaseStrategy, AIStrategy, DictionaryStrategy, MaskStrategy, HashcatStrategy, run_strategy()
 │   ├── tester.py                  # try_password(), format-specific _test_* helpers
 │   ├── handlers.py                # detect_format(), open_with_password(), extract_hash(), PasswordError (now with Office)
@@ -262,7 +274,7 @@ The orchestrator in `core.py` coordinates the Context Oracle, pluggable strategi
 │   ├── utils.py                   # load_config(), save_session(), brutalist_panel(), sanitize_password(), run_hashcat(), load_jobs(), save_job()
 │   └── dashboard.py               # Brutalist Flask web UI + job creation/monitoring
 ├── tests/
-│   ├── test_oracle.py             # Mocked Ollama responses and scoring tests
+│   ├── test_oracle.py             # Mocked Ollama responses, parsing and extract_context tests
 │   └── test_tester.py             # Unit + integration tests with fixture archives (now includes hashcat mocks)
 ├── examples/recovery_demo.py      # Runnable full-workflow example with test RAR
 └── LICENSE
@@ -274,7 +286,7 @@ The orchestrator in `core.py` coordinates the Context Oracle, pluggable strategi
 pytest -q
 ```
 
-Tests cover candidate generation (mocked Ollama in `test_oracle.py`), password testing with real fixture archives (`test_tester.py`), core orchestration, strategy merging, format detection, hash extraction and session serialization. Run with the `[test]` extra.
+Tests cover candidate generation (mocked Ollama in `test_oracle.py`), password testing with real fixture archives (`test_tester.py`), core orchestration, strategy merging, format detection, hash extraction and session serialization. Run with the `[test]` extra. New tests validate `extract_context()` with temporary files and mocked EXIF.
 
 ## 📍 Roadmap
 
@@ -283,7 +295,7 @@ Tests cover candidate generation (mocked Ollama in `test_oracle.py`), password t
 - [x] Add Office document (docx/xlsx) handlers
 - [x] Hashcat integration for GPU-accelerated mask and rule attacks
 - [x] Simple brutalist web dashboard for job monitoring
-- [ ] Auto-extract context from filename, nearby files and EXIF
+- [x] Auto-extract context from filename, nearby files and EXIF
 - [ ] Session export/import for sharing recovery state
 - [ ] Built-in password strength estimator with crack-time projection
 - [ ] Plugin system for user-supplied Python generators

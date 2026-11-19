@@ -80,7 +80,7 @@ def cli() -> None:
     "--hint",
     "-h",
     required=True,
-    help="Contextual memory about the password (e.g. 'dog name 2019 vacation')",
+    help="Contextual memory about the password (auto-augmented with filename, nearby files & EXIF)",
 )
 @click.option(
     "--model",
@@ -134,7 +134,7 @@ def recover_cmd(
         console.print("[#ff0044]ERROR: Hint cannot be empty.[/#ff0044]")
         raise click.Abort()
 
-    console.print(Text("→ Calling Context Oracle...", style="#00ff9f"))
+    console.print(Text("→ Calling Context Oracle (with auto-extracted context)...", style="#00ff9f"))
     console.print()
 
     try:

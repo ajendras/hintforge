@@ -3,16 +3,25 @@
 Uses Ollama to convert vague human memories/hints into intelligently
 ranked password candidates. Employs structured JSON prompting with
 robust fallback parsing for reliability across different models.
+
+Now also auto-extracts context from filename, nearby files and
+EXIF/PDF metadata when an archive_path is supplied.
 """
 
 from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 import ollama
 from pydantic import ValidationError
+
+try:
+    import exifread
+except ImportError:
+    exifread = None  # type: ignore[assignment]
 
 from .models import Candidate
 
@@ -21,9 +30,11 @@ def _build_system_prompt() -> str:
     """Return the system prompt that steers the LLM toward structured output."""
     return (
         "You are a password recovery specialist. "
-        "Given a user's vague memory about their archive password, "
-        "generate plausible candidates by combining words, dates, names, "
-        "pets, locations and common mutations (numbers, symbols, capitalization). "
+        "Given a user's vague memory about their archive password "
+        "AND any additional context extracted from the filename, "
+        "nearby files and EXIF/PDF metadata, generate plausible "
+        "candidates by combining words, dates, names, pets, locations "
+        "and common mutations (numbers, symbols, capitalization). "
         "Respond with **only** a valid JSON array of objects. "
         "Each object must have 'password' (string) and 'score' (float 0.0-1.0). "
         "Never add explanations, markdown or extra text."
@@ -125,19 +136,104 @@ def _parse_llm_response(text: str, requested_count: int) -> list[Candidate]:
     return sorted(unique, key=lambda c: c.score, reverse=True)[:requested_count]
 
 
+def extract_context(archive_path: str) -> str:
+    """Auto-extracts contextual keywords from the archive filename,
+    nearby files (.txt, .md etc.) and available EXIF or PDF metadata.
+
+    Returns a space-separated string of clean terms that is appended
+    to the user hint before calling the LLM.
+    """
+    if not archive_path:
+        return ""
+    path = Path(archive_path)
+    if not path.exists():
+        return ""
+
+    terms: list[str] = []
+
+    # Filename context
+    stem = path.stem
+    terms.extend(re.findall(r"[A-Za-z]+", stem))
+    terms.extend(re.findall(r"(19|20)\d{2}", stem))
+
+    # Nearby files (names + content of text-like files)
+    try:
+        for fpath in list(path.parent.iterdir())[:15]:
+            if not fpath.is_file() or fpath.name == path.name or fpath.name.startswith("."):
+                continue
+            terms.append(fpath.stem.replace("_", " ").replace("-", " "))
+            if fpath.suffix.lower() in (".txt", ".md", ".log", ".csv"):
+                try:
+                    text = fpath.read_text(encoding="utf-8", errors="ignore")[:512]
+                    terms.extend(re.findall(r"\b[A-Za-z]{3,20}\b", text))
+                except (OSError, UnicodeDecodeError):
+                    continue
+            if len(terms) > 50:
+                break
+    except (OSError, PermissionError):
+        pass
+
+    # EXIF for image files
+    suffix = path.suffix.lower()
+    if exifread is not None and suffix in (".jpg", ".jpeg", ".tif", ".tiff"):
+        try:
+            with open(path, "rb") as fp:
+                tags = exifread.process_file(fp, stop_tag="DateTimeOriginal", details=False)
+            for tkey, tval in tags.items():
+                if any(x in tkey for x in ("Date", "Model", "Make", "Artist")):
+                    val_str = str(tval).strip()
+                    if val_str:
+                        terms.append(val_str)
+                        terms.extend(re.findall(r"(19|20)\d{2}", val_str))
+        except Exception:
+            pass
+
+    # PDF metadata (non-encrypted only)
+    if suffix == ".pdf":
+        try:
+            import pikepdf
+            with pikepdf.open(path) as pdf:
+                if pdf.docinfo:
+                    for value in pdf.docinfo.values():
+                        if isinstance(value, (str, pikepdf.String)):
+                            val = str(value)
+                            terms.extend(re.findall(r"\b\w+\b", val))
+        except Exception:
+            pass  # encrypted PDFs raise PasswordError – we cannot read metadata
+
+    # Normalise, deduplicate, filter
+    seen: set[str] = set()
+    final_terms: list[str] = []
+    for term in terms:
+        term = term.strip().lower()
+        if (
+            term
+            and term not in seen
+            and len(term) > 1
+            and not re.match(r"^\d{1,2}$", term)
+        ):
+            seen.add(term)
+            final_terms.append(term)
+
+    return " ".join(final_terms[:30])
+
+
 def generate_candidates(
-    hint: str, count: int = 50, model: str = "llama3"
+    hint: str, count: int = 50, model: str = "llama3", archive_path: str | None = None
 ) -> list[Candidate]:
     """Generate ranked password candidates from a natural-language hint using Ollama.
 
-    The LLM is prompted to return structured JSON. Response is parsed robustly
-    with a line-based fallback. Candidates are deduplicated and sorted by
-    descending likelihood score.
+    If archive_path is supplied the hint is automatically augmented with
+    context extracted by extract_context() (filename, nearby files, EXIF,
+    PDF metadata). The LLM is prompted to return structured JSON.
+    Response is parsed robustly with a line-based fallback. Candidates
+    are deduplicated and sorted by descending likelihood score.
 
     Args:
         hint: Contextual memory provided by the user (e.g. "dog name 2019 vacation")
         count: Desired number of candidates (capped at 200 for practicality)
         model: Ollama model identifier (must be pulled locally)
+        archive_path: Optional path to the protected archive – triggers auto-context extraction
 
     Returns:
         List of Candidate objects sorted by score (highest first).
@@ -147,13 +243,24 @@ def generate_candidates(
         RuntimeError: If Ollama is unreachable or returns an error.
     """
     if not hint or not hint.strip():
-        raise ValueError("Hint cannot be empty or whitespace-only.")
+        if archive_path:
+            hint = extract_context(archive_path)
+            if not hint:
+                raise ValueError("Hint cannot be empty or whitespace-only and no context could be extracted.")
+        else:
+            raise ValueError("Hint cannot be empty or whitespace-only.")
 
     count = max(1, min(200, count))  # sensible bounds
 
+    hint_for_prompt = hint.strip()
+    if archive_path:
+        extracted = extract_context(archive_path)
+        if extracted:
+            hint_for_prompt = f"{hint.strip()}. Additional context from filename/nearby files/EXIF: {extracted}"
+
     messages = [
         {"role": "system", "content": _build_system_prompt()},
-        {"role": "user", "content": _build_user_prompt(hint.strip(), count)},
+        {"role": "user", "content": _build_user_prompt(hint_for_prompt, count)},
     ]
 
     try:
@@ -197,4 +304,4 @@ def generate_candidates(
         raise RuntimeError(f"Unexpected error during candidate generation: {exc}") from exc
 
 
-__all__ = ["generate_candidates"]
+__all__ = ["generate_candidates", "extract_context"]

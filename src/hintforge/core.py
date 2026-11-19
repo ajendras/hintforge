@@ -135,7 +135,7 @@ def recover(
     """Orchestrate full password recovery pipeline.
 
     1. Load/merge session (if resuming)
-    2. Generate AI candidates via Oracle
+    2. Generate AI candidates via Oracle (augmented by extract_context())
     3. Augment with pluggable strategies (dictionary, mask, hashcat GPU)
     4. Rank by likelihood
     5. Test candidates in order using format-specific handlers
@@ -147,7 +147,7 @@ def recover(
     if not Path(archive_path).is_file():
         raise FileNotFoundError(f"Cannot find archive: {archive_path}")
     if not hint or not hint.strip():
-        raise ValueError("A non-empty hint is required for AI candidate generation.")
+        console.print("[dim]No hint supplied – relying solely on auto-extracted context[/]")
 
     config = load_config()
     config.model = model
@@ -160,10 +160,13 @@ def recover(
 
     # Generate fresh candidates if we haven't tested enough
     if len(session.tested) < config.max_candidates:
-        console.print("   [bold #00ff9f]→ Calling Context Oracle[/]")
+        console.print("   [bold #00ff9f]→ Calling Context Oracle (auto-context enabled)[/]")
         try:
             ai_candidates = generate_candidates(
-                hint=hint, count=config.max_candidates * 2, model=config.model
+                hint=hint,
+                count=config.max_candidates * 2,
+                model=config.model,
+                archive_path=archive_path,
             )
         except Exception as exc:
             console.print(f"[#ff0044]Oracle failed: {exc}[/#ff0044]")
