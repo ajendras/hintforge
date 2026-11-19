@@ -270,7 +270,8 @@ def extract_hash(archive_path: str, forced_format: str | None = None) -> str:
             check=True,
             timeout=15,
         )
-        Path(hash_path).write_text(result.stdout.strip())
+        with open(hash_path, "w", encoding="utf-8") as f:
+            f.write(result.stdout.strip())
         return hash_path
     except FileNotFoundError as exc:
         raise RuntimeError(
