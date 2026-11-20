@@ -1,232 +1,39 @@
-"""Password testing facade for HintForge.
+"""Password tester facade for HintForge.
 
-Dispatches to format-specific handlers for ZIP, RAR, PDF, 7z, TAR and
-Office (docx/xlsx via optional msoffcrypto). Uses non-destructive
-read/test operations only. Never modifies archives.
+Provides a clean try_password() entry point that delegates to the
+format-specific logic in handlers.py (open_with_password + PasswordError).
+Non-destructive, safe for use in dry-run, strategies and live recovery.
 """
 
 from __future__ import annotations
 
-import tarfile
-import zipfile
-from pathlib import Path
-from typing import Any
-
-import pikepdf
-import py7zr
-import rarfile
-
-# msoffcrypto is an optional dependency (no compatible release for Python 3.12+ yet)
-try:
-    import msoffcrypto
-    from msoffcrypto.exceptions import DecryptionError
-    _HAS_MSOFFCRYPTO = True
-except ImportError:
-    msoffcrypto = None  # type: ignore[assignment]
-    DecryptionError = Exception  # type: ignore[assignment]
-    _HAS_MSOFFCRYPTO = False
-
-from .handlers import detect_format, open_with_password, PasswordError
-from .models import Candidate
-from .utils import sanitize_password
+from .handlers import open_with_password, PasswordError
 
 
-def _detect_format_fallback(path: str) -> str:
-    """Internal fallback detection when handlers.detect_format is not available."""
-    p = Path(path)
-    if not p.exists():
-        raise FileNotFoundError(f"Archive not found: {path}")
+def try_password(
+    archive_path: str, password: str, forced_format: str | None = None
+) -> bool:
+    """Test a candidate password against an encrypted archive.
 
-    suffix = p.suffix.lower()
-    if suffix in (".docx", ".xlsx", ".docm", ".xlsm", ".pptx"):
-        return "office"
-    if suffix in (".zip", ".jar"):
-        return "zip"
-    if suffix == ".rar":
-        return "rar"
-    if suffix in (".7z", ".7zip"):
-        return "7z"
-    if suffix == ".pdf":
-        return "pdf"
-    if any(suffix.startswith(x) for x in (".tar", ".tgz", ".tbz")):
-        return "tar"
+    Uses the unified open_with_password context manager (which performs
+    the minimal work necessary to validate the password for each format).
+    Returns True on success, False on PasswordError (wrong password).
+    All other exceptions are propagated so the orchestrator can surface them.
 
-    # Try python-magic if installed
+    This function is the single source of truth used by core.recover(),
+    HashcatStrategy, the web dashboard jobs, and all tests.
+    """
     try:
-        import magic  # type: ignore[import-not-found]
-
-        mime = magic.from_file(str(p.resolve()), mime=True)
-        if "zip" in mime or "application/zip" in mime:
-            return "zip"
-        if "rar" in mime:
-            return "rar"
-        if "pdf" in mime:
-            return "pdf"
-        if any(o in mime for o in ("ms-office", "officedocument")):
-            return "office"
-    except Exception:  # pragma: no cover - optional dependency
-        pass
-
-    return "zip"  # conservative default
-
-
-def _test_zip(path: str, password: str) -> bool:
-    """Test ZIP archive (including AES-encrypted members)."""
-    try:
-        with zipfile.ZipFile(path) as zf:
-            # If no encrypted files, any password is fine but we still validate
-            encrypted = any(info.flag_bits & 0x1 for info in zf.infolist())
-            if not encrypted:
-                return True
-            # Test first encrypted file
-            for info in zf.infolist():
-                if info.flag_bits & 0x1:
-                    try:
-                        zf.read(info.filename, pwd=password.encode("utf-8", errors="replace"))
-                        return True
-                    except (RuntimeError, zipfile.BadZipFile, RuntimeError):
-                        return False
-        return True
-    except (zipfile.BadZipFile, RuntimeError, OSError):
-        return False
-    except Exception:  # pragma: no cover
-        return False
-
-
-def _test_rar(path: str, password: str) -> bool:
-    """Test RAR archive using rarfile."""
-    try:
-        with rarfile.RarFile(path) as rf:
-            rf.set_password(password)
-            # testrar() will raise on bad password
-            rf.testrar()
-        return True
-    except (rarfile.BadRarFile, rarfile.RarWrongPassword, RuntimeError):
-        return False
-    except Exception:  # pragma: no cover
-        return False
-
-
-def _test_7z(path: str, password: str) -> bool:
-    """Test 7z archive using py7zr."""
-    try:
-        with py7zr.SevenZipFile(path, mode="r", password=password) as archive:
-            archive.list()
-        return True
-    except py7zr.BadPassword:
-        return False
-    except Exception:  # pragma: no cover
-        return False
-
-
-def _test_pdf(path: str, password: str) -> bool:
-    """Test PDF with pikepdf (handles both 40-bit, 128-bit and AES)."""
-    try:
-        with pikepdf.open(path, password=password, allow_overwriting_input=False) as pdf:
-            # Force a small amount of parsing
-            _ = pdf.pages[0] if pdf.pages else None
-        return True
-    except pikepdf.PasswordError:
+        with open_with_password(
+            archive_path, password, forced_format=forced_format
+        ):
+            return True
+    except PasswordError:
         return False
     except Exception as exc:
-        if any(term in str(exc).lower() for term in ("password", "incorrect", "invalid")):
-            return False
-        raise
+        raise RuntimeError(
+            f"Unexpected tester error on {archive_path}"
+        ) from exc
 
 
-def _test_tar(path: str, password: str) -> bool:
-    """Placeholder for encrypted TAR support.
-
-    Native tar does not support passwords. We assume the archive may be
-    a .tar inside a 7z/zip or encrypted with external tools (gpg, openssl).
-    Full support will be provided via handlers.py.
-    """
-    # For now we return False so the pipeline continues with other strategies.
-    # In a future extension this could shell out to gpg --decrypt --passphrase ...
-    return False
-
-
-def _test_office(path: str, password: str) -> bool:
-    """Test Microsoft Office (docx/xlsx) document password via msoffcrypto.
-
-    Uses a discarding sink so that we do not hold the full decrypted
-    document in memory.
-    """
-    if not _HAS_MSOFFCRYPTO:
-        return False
-    try:
-        with open(path, "rb") as f:
-            office = msoffcrypto.OfficeFile(f)
-            if not office.is_encrypted():
-                return True
-            office.load_key(password=password)
-
-            class _Sink:
-                def write(self, data: bytes) -> int:
-                    return len(data)
-
-            office.decrypt(_Sink())
-            return True
-    except (DecryptionError, ValueError, RuntimeError, OSError):
-        return False
-    except Exception:  # pragma: no cover
-        return False
-
-
-def try_password(path: str, pw: str) -> bool:
-    """Attempt to unlock the archive with the supplied password.
-
-    Dispatches to the correct handler based on auto-detected format.
-    All operations are read-only and non-destructive. Now supports
-    Office (docx/xlsx) documents.
-
-    Args:
-        path: Absolute or relative path to the encrypted archive.
-        pw: Candidate password to test.
-
-    Returns:
-        True if the password successfully opens the archive.
-
-    Raises:
-        FileNotFoundError: If the archive does not exist.
-        ValueError: On obviously malformed input.
-    """
-    if not path or not isinstance(path, str):
-        raise ValueError("Archive path must be a non-empty string")
-
-    archive_path = Path(path)
-    if not archive_path.is_file():
-        raise FileNotFoundError(f"Archive does not exist or is not a file: {path}")
-
-    password = sanitize_password(pw)
-    if not password:
-        return False
-
-    try:
-        fmt = detect_format(str(archive_path))
-    except Exception:  # handlers may not be implemented yet
-        fmt = _detect_format_fallback(str(archive_path))
-
-    if fmt == "zip":
-        return _test_zip(str(archive_path), password)
-    if fmt == "rar":
-        return _test_rar(str(archive_path), password)
-    if fmt == "7z":
-        return _test_7z(str(archive_path), password)
-    if fmt == "pdf":
-        return _test_pdf(str(archive_path), password)
-    if fmt == "tar":
-        return _test_tar(str(archive_path), password)
-    if fmt == "office":
-        return _test_office(str(archive_path), password)
-
-    # Unknown format falls back to ZIP test (most common)
-    return _test_zip(str(archive_path), password)
-
-
-def test_candidate(path: str, candidate: Candidate) -> bool:
-    """Convenience wrapper for testing a Candidate object."""
-    return try_password(path, candidate.value)
-
-
-__all__ = ["try_password", "test_candidate", "detect_format"]
+__all__ = ["try_password"]
