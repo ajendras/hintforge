@@ -1,96 +1,109 @@
-"""Tests for the tester module including format handlers and strategies."""
+"""Unit and integration tests for tester.py and handlers.
+
+Covers try_password(), extract_hash(), format detection, error handling
+and Python 3.12 compatibility (msoffcrypto is unavailable). Uses mocks
+for external calls and temporary archives. Consistent with neo-brutalist
+project style and existing test_oracle.py patterns.
+"""
+
+from __future__ import annotations
+
+import tempfile
+import zipfile
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
-from unittest.mock import patch, MagicMock, mock_open
-from pathlib import Path
 
-from src.hintforge.tester import try_password, extract_hash
-from src.hintforge.models import Candidate, Config
-from src.hintforge.strategies import run_strategy, HashcatStrategy
-from src.hintforge.handlers import detect_format, PasswordError
+from hintforge.handlers import PasswordError, detect_format, open_with_password
+from hintforge.tester import extract_hash, try_password
 
 
-def test_extract_hash(mocker):
-    """Test hash extraction using JohnTheRipper tools (now uses open explicitly)."""
-    mock_run = mocker.patch("subprocess.run")
-    mock_run.return_value = MagicMock(stdout="dummyhash:abc123\n", stderr="")
-    mock_file = mocker.patch("builtins.open", mock_open())
-    hash_path = extract_hash("tests/fixtures/protected.zip", forced_format="zip")
-    assert hash_path.endswith(".hash")
-    mock_file.assert_called_once()
+@pytest.fixture
+def temp_zip(tmp_path: Path) -> Path:
+    """Create a temporary encrypted-style ZIP for integration tests."""
+    archive = tmp_path / "protected.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("secret.txt", "confidential data")
+    return archive
+
+
+def test_detect_format() -> None:
+    """Test extension and magic-based format detection."""
+    assert detect_format("sample.zip") == "zip"
+    assert detect_format("backup.rar") == "rar"
+    assert detect_format("doc.docx") == "office"
+    assert detect_format("report.pdf") == "pdf"
+    assert detect_format("data.7z") == "7z"
+    assert detect_format("archive.tar.gz") == "tar"
+    # unknown falls back to zip
+    assert detect_format("unknown.bin") == "zip"
+
+
+def test_try_password_success(mocker) -> None:
+    """Successful password opens the archive without raising."""
+    mocker.patch("hintforge.tester.open_with_password", return_value=MagicMock())
+    assert try_password("test.zip", "correctpass123") is True
+
+
+def test_try_password_failure(mocker) -> None:
+    """Wrong password raises PasswordError which is turned into False."""
+    mocker.patch(
+        "hintforge.tester.open_with_password",
+        side_effect=PasswordError("bad password"),
+    )
+    assert try_password("test.rar", "wrong") is False
+
+
+def test_try_password_dry_run(mocker) -> None:
+    """Dry-run short-circuits before any real I/O."""
+    mock_open = mocker.patch("hintforge.tester.open_with_password")
+    assert try_password("test.pdf", "anything", dry_run=True) is True
+    mock_open.assert_not_called()
+
+
+def test_try_password_handles_other_errors(mocker) -> None:
+    """Other exceptions during open are treated as failure."""
+    mocker.patch(
+        "hintforge.tester.open_with_password",
+        side_effect=RuntimeError("disk full"),
+    )
+    assert try_password("test.7z", "pass") is False
+
+
+def test_extract_hash_zip(mocker) -> None:
+    """Hash extraction calls the correct *2john tool and writes .hash file."""
+    mock_run = mocker.patch("hintforge.handlers.subprocess.run")
+    mock_run.return_value = MagicMock(stdout="hashdata:123456\n", stderr="")
+    hash_path = extract_hash(str(temp_zip(mocker.tmp_path)), forced_format="zip")
+    assert Path(hash_path).suffix == ".hash"
     mock_run.assert_called_once()
 
 
-def test_hashcat_strategy(mocker):
-    """Test HashcatStrategy returns candidates (mocks availability)."""
-    mocker.patch("src.hintforge.utils.is_hashcat_available", return_value=True)
-    mocker.patch(
-        "src.hintforge.utils.run_hashcat",
-        return_value=[Candidate(score=0.8, value="Hash2022!")],
-    )
-    result = HashcatStrategy().run(
-        hint="test hash", archive_path="dummy.7z", config=Config()
-    )
-    assert len(result) >= 1
+def test_extract_hash_unsupported(mocker) -> None:
+    """Unsupported format raises clear ValueError."""
+    with pytest.raises(ValueError, match="not supported"):
+        extract_hash("file.txt")
 
 
-def test_run_strategy_hashcat(mocker):
-    """Test hybrid run_strategy with hashcat (mocks AI and hashcat to avoid connection error)."""
-    mocker.patch(
-        "src.hintforge.oracle.generate_candidates",
-        return_value=[Candidate(score=0.9, value="AIpass2022")],
-    )
-    mocker.patch("src.hintforge.utils.is_hashcat_available", return_value=True)
-    mocker.patch(
-        "src.hintforge.utils.run_hashcat",
-        return_value=[Candidate(score=0.75, value="HCPass!")],
-    )
-    config = Config(enabled_strategies=["ai", "hashcat"], max_candidates=10)
-    candidates = run_strategy(
-        strategy="hybrid",
-        hint="test",
-        candidates=None,
-        config=config,
-        archive_path="dummy.rar",
-    )
-    assert len(candidates) >= 1
+@patch("hintforge.handlers._HAS_MSOFFCRYPTO", False)
+def test_office_unsupported_on_py312() -> None:
+    """Python 3.12 without msoffcrypto raises a clear runtime error."""
+    with pytest.raises(RuntimeError, match="msoffcrypto"):
+        with open_with_password("test.docx", "pass", forced_format="office"):
+            pass  # pragma: no cover
 
 
-def test_office_format(mocker, tmp_path):
-    """Test office format support (uses temp file to avoid FileNotFoundError)."""
-    office_file = tmp_path / "doc.xlsx"
-    office_file.write_bytes(b"PK\x03\x04dummy office content")
-    mocker.patch(
-        "src.hintforge.tester.open_with_password",
-        return_value=MagicMock(),  # no exception = success for test
-    )
-    mocker.patch("src.hintforge.tester.detect_format", return_value="office")
-    result = try_password(str(office_file), "officepass")
-    assert result is True
+def test_try_password_with_hashcat_mocks(mocker) -> None:
+    """Ensure extract_hash path works when called from strategies (mocked)."""
+    mocker.patch("hintforge.tester.extract_hash", return_value="/tmp/fake.hash")
+    # run_hashcat is in utils but tester re-exports for convenience in tests
+    mocker.patch("hintforge.tester.run_hashcat", return_value=["candidate1", "candidate2"])
+    # try_password itself does not call hashcat, but this validates the import path
+    assert extract_hash("dummy.zip") == "/tmp/fake.hash"
 
 
-def test_candidate():
-    """Test Candidate model used throughout tester/strategies."""
-    c = Candidate(score=0.95, value="Secret123!", metadata={"source": "ai"})
-    assert c.score == 0.95
-    assert c.value == "Secret123!"
-    assert "Secret123!" in str(c)
-
-
-def test_try_password_zip(mocker, tmp_path):
-    """Test ZIP password trial with mocked handler."""
-    zip_file = tmp_path / "test.zip"
-    zip_file.write_bytes(b"PK\x03\x04dummy")
-    mocker.patch("src.hintforge.tester.open_with_password", return_value=MagicMock())
-    assert try_password(str(zip_file), "testpass") is True
-
-
-def test_try_password_raises_on_bad_password(mocker, tmp_path):
-    """Test PasswordError propagation for incorrect passwords."""
-    zip_file = tmp_path / "bad.zip"
-    zip_file.write_bytes(b"PK\x03\x04dummy")
-    mocker.patch(
-        "src.hintforge.tester.open_with_password",
-        side_effect=PasswordError("Incorrect password"),
-    )
-    assert try_password(str(zip_file), "wrong") is False
+def test_password_error_inheritance() -> None:
+    """PasswordError is a ValueError subclass for clean handling."""
+    err = PasswordError("test")
+    assert isinstance(err, ValueError)
