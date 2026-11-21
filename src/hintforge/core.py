@@ -2,6 +2,8 @@
 
 Coordinates the Context Oracle, pluggable attack strategies, password tester,
 session persistence and live neo-brutalist progress reporting.
+
+Now includes export_session() / import_session() for sharing recovery state.
 """
 
 from __future__ import annotations
@@ -339,4 +341,91 @@ def start_job_in_background(job_id: str) -> None:
     Thread(target=run_job, args=(job_id,), daemon=True).start()
 
 
-__all__ = ["recover", "analyze", "create_job", "get_job", "update_job", "start_job_in_background"]
+def export_session(archive_path: str, output_path: str | None = None) -> str:
+    """Export the current recovery session to a portable JSON file for sharing.
+
+    The file contains tested candidates, found password (if any), hint and
+    metadata. It can be sent to collaborators or used on another machine.
+    """
+    session_file = Path(".hintforge") / f"{Path(archive_path).name}.session.json"
+    if not session_file.exists():
+        raise FileNotFoundError(
+            f"No session found for {archive_path}. "
+            "Run 'hintforge recover' first to create a session."
+        )
+
+    if output_path is None:
+        output_path = f"{Path(archive_path).stem}.session.json"
+
+    out_path = Path(output_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(session_file, encoding="utf-8") as f:
+        data = json.load(f)
+
+    state = SessionState.model_validate(data)
+    export_data = state.model_dump(mode="json")
+    export_data["exported_at"] = datetime.now().isoformat()
+    export_data["exported_from"] = str(Path(archive_path).absolute())
+
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(export_data, f, indent=2, ensure_ascii=False)
+
+    console.print(
+        brutalist_panel(
+            "SESSION EXPORTED",
+            f"Saved to: {out_path}\n"
+            "Share this file to let others resume your recovery work.",
+            style="#00ff9f",
+        )
+    )
+    return str(out_path)
+
+
+def import_session(session_file: str, target_archive_path: str | None = None) -> SessionState:
+    """Import a previously exported session file.
+
+    If target_archive_path is supplied it overrides the embedded archive path
+    (useful when the file has moved). The session is saved into .hintforge/
+    so that 'recover --resume' works immediately.
+    """
+    path = Path(session_file)
+    if not path.is_file():
+        raise FileNotFoundError(f"Session file not found: {session_file}")
+
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        state = SessionState.model_validate(data)
+
+        if target_archive_path:
+            state.archive_path = target_archive_path
+
+        session_dir = Path(".hintforge")
+        session_dir.mkdir(parents=True, exist_ok=True)
+        save_session(state)
+
+        console.print(
+            brutalist_panel(
+                "SESSION IMPORTED",
+                f"Archive: {Path(state.archive_path).name}\n"
+                f"Tested candidates: {state.candidates_tested}\n"
+                f"Password found: {state.found or 'None yet'}",
+                style="#00ff9f",
+            )
+        )
+        return state
+    except Exception as exc:
+        raise ValueError(f"Failed to import session: {exc}") from exc
+
+
+__all__ = [
+    "recover",
+    "analyze",
+    "create_job",
+    "get_job",
+    "update_job",
+    "start_job_in_background",
+    "export_session",
+    "import_session",
+]

@@ -19,7 +19,7 @@ from rich import box
 from rich.table import Table
 
 from . import __version__
-from .core import recover, analyze
+from .core import recover, analyze, export_session, import_session
 from .oracle import generate_candidates
 from .models import Candidate
 
@@ -358,6 +358,104 @@ def dashboard_cmd(port: int, debug: bool) -> None:
         console.print(
             Panel(
                 Text(f"DASHBOARD FAILURE\n{exc!s}", style="bold #ff0044"),
+                box=box.HEAVY,
+                border_style="#ff0044",
+            )
+        )
+        sys.exit(1)
+
+
+@cli.command(name="export")
+@click.argument(
+    "archive",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path, readable=True),
+)
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(path_type=Path, writable=True),
+    help="Output path for the exported session JSON",
+)
+def export_cmd(archive: Path, output: Path | None = None) -> None:
+    """Export a recovery session for sharing or backup."""
+    _brutalist_header(
+        "EXPORT RECOVERY SESSION",
+        f"Target: {archive.name}",
+    )
+    try:
+        out_path = export_session(
+            str(archive), str(output) if output is not None else None
+        )
+        console.print(
+            Panel(
+                Text(f"SESSION EXPORTED SUCCESSFULLY\nSaved to: {out_path}", style="bold #00ff9f"),
+                box=box.HEAVY,
+                border_style="#00ff9f",
+                padding=(1, 2),
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        console.print(
+            Panel(
+                Text(f"EXPORT FAILED\n{exc!s}", style="bold #ff0044"),
+                box=box.HEAVY,
+                border_style="#ff0044",
+            )
+        )
+        sys.exit(1)
+
+
+@cli.command(name="import")
+@click.argument(
+    "session_file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path, readable=True),
+)
+@click.option(
+    "--archive",
+    "-a",
+    type=click.Path(path_type=Path),
+    help="Target archive path (overrides the one stored in session)",
+)
+def import_cmd(session_file: Path, archive: Path | None = None) -> None:
+    """Import a shared recovery session."""
+    _brutalist_header(
+        "IMPORT RECOVERY SESSION",
+        f"File: {session_file.name}",
+    )
+    try:
+        state = import_session(
+            str(session_file), str(archive) if archive is not None else None
+        )
+        content = Text()
+        content.append("SESSION IMPORTED SUCCESSFULLY\n", style="bold #00ff9f")
+        content.append(f"Archive : {Path(state.archive_path).name}\n")
+        content.append(f"Tested  : {state.candidates_tested} candidates\n")
+        content.append(f"Found   : {state.found or 'None yet'}", style="#00ff9f" if state.found else "dim white")
+
+        console.print(
+            Panel(
+                content,
+                box=box.HEAVY,
+                border_style="#00ff9f",
+                padding=(1, 2),
+            )
+        )
+        if state.found:
+            success = Text()
+            success.append("RECOVERED PASSWORD: ", style="bold #00ff9f")
+            success.append(state.found, style="bold white on #ff0044")
+            console.print(
+                Panel(
+                    success,
+                    box=box.HEAVY,
+                    border_style="#00ff9f",
+                    padding=(1, 2),
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        console.print(
+            Panel(
+                Text(f"IMPORT FAILED\n{exc!s}", style="bold #ff0044"),
                 box=box.HEAVY,
                 border_style="#ff0044",
             )

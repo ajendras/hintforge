@@ -106,9 +106,10 @@ class Config(BaseModel):
 
 
 class SessionState(BaseModel):
-    """Serializable recovery session for checkpoint/resume functionality.
+    """Serializable recovery session for checkpoint/resume and sharing via export/import.
 
-    Persisted as JSON in .hintforge/ directory.
+    Persisted as JSON in .hintforge/ directory. The export/import API and CLI
+    commands make it easy to share partial or complete recovery state.
     """
 
     archive_path: str
@@ -121,10 +122,14 @@ class SessionState(BaseModel):
     end_time: float | None = None
     candidates: list[Candidate] | None = None
     strategy_stats: dict[str, Any] = Field(default_factory=dict)
+    version: str = Field(
+        default="0.2.0",
+        description="Session format version for forward compatibility when sharing.",
+    )
 
     model_config = ConfigDict(
         arbitrary_types_allowed=True,
-        extra="forbid",
+        extra="ignore",  # allow extra metadata from exported sessions
     )
 
     def mark_tested(self, password: str) -> None:

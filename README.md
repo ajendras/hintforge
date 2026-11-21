@@ -77,8 +77,8 @@ Easy-to-extend <code>BaseStrategy</code> subclasses and registry (now with Hashc
 <code>--dry-run</code> and non-destructive validation via <code>tester.py</code>
 </td>
 <td>
-⏳ <b>Session Resume</b><br>
-Checkpoint/restore with <code>SessionState</code> JSON files
+⏳ <b>Session Resume &amp; Share</b><br>
+Checkpoint/restore with <code>SessionState</code> JSON files. New <code>export</code> / <code>import</code> commands for sharing recovery state
 </td>
 </tr>
 <tr>
@@ -130,7 +130,8 @@ hintforge dashboard
 Or use the Python API exposed in `src/hintforge/__init__.py`:
 
 ```python
-from hintforge import recover, extract_context
+from hintforge import recover, extract_context, export_session, import_session
+from hintforge.models import SessionState
 
 print(extract_context("protected.zip"))  # see auto-extracted terms
 
@@ -143,6 +144,11 @@ password = recover(
     resume=False
 )
 print(password)
+
+# Share recovery state
+export_session("protected.zip", "team_session.json")
+state: SessionState = import_session("team_session.json")
+print(f"Imported session with {state.candidates_tested} candidates tested")
 ```
 
 ## 🧰 Usage
@@ -168,6 +174,19 @@ hintforge recover documents.zip \
   --hint "our wedding year and dogs name" \
   --max-candidates 120 \
   --resume
+```
+
+Export and import sessions for collaboration, backup or moving between machines:
+
+```bash
+# Export current recovery state
+hintforge export documents.zip --output team_session.json
+
+# Import on another machine (optionally override archive path)
+hintforge import team_session.json --archive /new/path/documents.zip
+
+# Resume from the imported session
+hintforge recover documents.zip --resume
 ```
 
 Start the web dashboard (opens a neo-brutalist monitoring interface):
@@ -233,7 +252,7 @@ All values are defined in `models.Config` and loaded from `config.toml` by `util
 
 ```mermaid
 flowchart TD
-    CLI[cli.py<br>recover / analyze / generate / dashboard] --> Core[core.py<br>recover() + analyze() + job orchestration]
+    CLI[cli.py<br>recover / analyze / generate / dashboard / export / import] --> Core[core.py<br>recover(), analyze(), session handling, export/import + job management]
     Core --> Oracle[oracle.py<br>generate_candidates() + extract_context()]
     Oracle --> Ollama[(Ollama<br>llama3)]
     Oracle --> FS[Filesystem<br>filename + nearby .txt/.md + EXIF/PDF metadata]
@@ -244,7 +263,7 @@ flowchart TD
     Strategies --> HashcatStrategy[HashcatStrategy<br>GPU mask/rule]
     Core --> Tester[tester.py<br>try_password()]
     Tester --> Handlers[handlers.py<br>detect_format() + open_with_password() + extract_hash()]
-    Core --> Session[(SessionState<br>.hintforge/*.json)]
+    Core --> Session[(SessionState<br>.hintforge/*.json<br>export/import)]
     Core --> Jobs[(Job<br>.hintforge/job-*.json)]
     Core --> Dashboard[dashboard.py<br>Flask brutalist UI]
     Core --> Utils[utils.py<br>load_config() + brutalist_panel() + sanitize_password() + run_hashcat() + job persistence]
@@ -254,7 +273,7 @@ flowchart TD
     Dashboard --> Browser[(Browser<br>neo-brutalist UI)]
 ```
 
-The orchestrator in `core.py` coordinates the Context Oracle, pluggable strategies, tester facade and session persistence. All data flows through Pydantic `Candidate` and `Config` models, keeping the pipeline type-safe, resumable and easy to extend. The new dashboard provides a web front-end for job management using the same models. `extract_context()` automatically enriches every hint when an `archive_path` is supplied.
+The orchestrator in `core.py` coordinates the Context Oracle, pluggable strategies, tester facade and session persistence. All data flows through Pydantic `Candidate` and `Config` models, keeping the pipeline type-safe, resumable and easy to extend. The new dashboard provides a web front-end for job management using the same models. `extract_context()` automatically enriches every hint when an `archive_path` is supplied. Session export/import makes it trivial to share partial or complete recovery state.
 
 ## 📁 Project structure
 
@@ -263,9 +282,9 @@ The orchestrator in `core.py` coordinates the Context Oracle, pluggable strategi
 ├── pyproject.toml                 # Metadata, dependencies, console_scripts entrypoint
 ├── config.toml                    # Default model, temperature, strategies, paths
 ├── src/hintforge/
-│   ├── __init__.py                # Public API: recover, analyze, generate_candidates, run_strategy, Candidate, Job, run_dashboard, extract_context
+│   ├── __init__.py                # Public API: recover, analyze, generate_candidates, run_strategy, Candidate, Job, run_dashboard, extract_context, export_session, import_session
 │   ├── cli.py                     # Click commands + neo-brutalist Rich UI (_brutalist_header, HEAVY boxes)
-│   ├── core.py                    # Orchestrator: recover(), analyze(), session handling + job management
+│   ├── core.py                    # Orchestrator: recover(), analyze(), session handling, export/import + job management
 │   ├── oracle.py                  # Ollama integration, JSON parsing, _parse_llm_response(), extract_context()
 │   ├── strategies.py              # BaseStrategy, AIStrategy, DictionaryStrategy, MaskStrategy, HashcatStrategy, run_strategy()
 │   ├── tester.py                  # try_password(), format-specific _test_* helpers
@@ -275,7 +294,7 @@ The orchestrator in `core.py` coordinates the Context Oracle, pluggable strategi
 │   └── dashboard.py               # Brutalist Flask web UI + job creation/monitoring
 ├── tests/
 │   ├── test_oracle.py             # Mocked Ollama responses, parsing and extract_context tests
-│   └── test_tester.py             # Unit + integration tests with fixture archives (now includes hashcat mocks)
+│   └── test_tester.py             # Unit + integration tests with fixture archives (now includes hashcat mocks + session export/import)
 ├── examples/recovery_demo.py      # Runnable full-workflow example with test RAR
 └── LICENSE
 ```
@@ -286,7 +305,7 @@ The orchestrator in `core.py` coordinates the Context Oracle, pluggable strategi
 pytest -q
 ```
 
-Tests cover candidate generation (mocked Ollama in `test_oracle.py`), password testing with real fixture archives (`test_tester.py`), core orchestration, strategy merging, format detection, hash extraction and session serialization. Run with the `[test]` extra. New tests validate `extract_context()` with temporary files and mocked EXIF.
+Tests cover candidate generation (mocked Ollama in `test_oracle.py`), password testing with real fixture archives (`test_tester.py`), core orchestration, strategy merging, format detection, hash extraction, session serialization **and the new export/import functionality**. Run with the `[test]` extra. New tests validate `extract_context()` with temporary files and mocked EXIF as well as round-tripping of `SessionState` via export/import.
 
 ## 📍 Roadmap
 
@@ -296,7 +315,7 @@ Tests cover candidate generation (mocked Ollama in `test_oracle.py`), password t
 - [x] Hashcat integration for GPU-accelerated mask and rule attacks
 - [x] Simple brutalist web dashboard for job monitoring
 - [x] Auto-extract context from filename, nearby files and EXIF
-- [ ] Session export/import for sharing recovery state
+- [x] Session export/import for sharing recovery state
 - [ ] Built-in password strength estimator with crack-time projection
 - [ ] Plugin system for user-supplied Python generators
 - [ ] Parallel testing using ProcessPoolExecutor
