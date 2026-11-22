@@ -19,9 +19,9 @@ from rich import box
 from rich.table import Table
 
 from . import __version__
-from .core import recover, analyze, export_session, import_session
+from .core import recover, analyze, export_session, import_session, estimate_strength
 from .oracle import generate_candidates
-from .models import Candidate
+from .models import Candidate, StrengthReport
 
 console = Console(highlight=False, color_system="truecolor")
 
@@ -323,6 +323,78 @@ def generate_cmd(hint: str, count: int, model: str, min_score: float) -> None:
         console.print(
             Panel(
                 Text(f"GENERATION FAILED\n{exc!s}", style="bold #ff0044"),
+                box=box.HEAVY,
+                border_style="#ff0044",
+            )
+        )
+        sys.exit(1)
+
+
+@cli.command(name="strength")
+@click.argument("password", type=str)
+def strength_cmd(password: str) -> None:
+    """Estimate strength of a password with crack-time projections."""
+    _brutalist_header(
+        "PASSWORD STRENGTH ESTIMATOR",
+        "Entropy • Crack-time projection",
+    )
+
+    if not password:
+        console.print("[#ff0044]Password cannot be empty.[/#ff0044]")
+        raise click.Abort()
+
+    try:
+        report: StrengthReport = estimate_strength(password)
+
+        # Never echo the real password in cleartext
+        obscured = password[:2] + "●" * max(len(password) - 4, 0) + password[-2:] if len(password) > 4 else "●●●●"
+
+        table = Table(
+            box=box.HEAVY,
+            border_style="#00ff9f",
+            title="STRENGTH REPORT",
+            title_style="bold #ff0044",
+            padding=(0, 2),
+        )
+        table.add_column("PROPERTY", style="#00ff9f", no_wrap=True)
+        table.add_column("VALUE", style="white")
+
+        table.add_row("PASSWORD", obscured)
+        table.add_row("ENTROPY", f"{report.entropy_bits:.2f} bits")
+        table.add_row("STRENGTH", report.strength.upper())
+        console.print(table)
+        console.print()
+
+        ct_table = Table(
+            box=box.HEAVY,
+            border_style="#ff0044",
+            title="CRACK TIME PROJECTIONS",
+            title_style="bold #00ff9f",
+        )
+        ct_table.add_column("SCENARIO", style="#00ff9f")
+        ct_table.add_column("TIME", style="bold white")
+        for scenario, t in report.crack_times.items():
+            name = scenario.replace("_", " ").replace("offline", "OFFLINE").upper()
+            ct_table.add_row(name, t)
+        console.print(ct_table)
+
+        if report.feedback:
+            fb = Text()
+            fb.append("FEEDBACK & RECOMMENDATIONS\n", style="bold #ff0044")
+            for item in report.feedback:
+                fb.append(f"→ {item}\n", style="dim white")
+            console.print(
+                Panel(
+                    fb,
+                    box=box.HEAVY,
+                    border_style="#ff0044",
+                    padding=(1, 3),
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        console.print(
+            Panel(
+                Text(f"STRENGTH ESTIMATION FAILED\n{exc!s}", style="bold #ff0044"),
                 box=box.HEAVY,
                 border_style="#ff0044",
             )

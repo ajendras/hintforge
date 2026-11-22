@@ -86,7 +86,11 @@ Checkpoint/restore with <code>SessionState</code> JSON files. New <code>export</
 🔎 <b>Strength Analyzer</b><br>
 <code>analyze()</code> reports encryption strength and recommends strategy (including hashcat)
 </td>
-<td colspan="2">
+<td>
+🔐 <b>Password Strength Estimator</b><br>
+Built-in entropy calculation + crack-time projections (online/CPU/GPU) via <code>estimate_strength()</code>
+</td>
+<td>
 🔬 <b>GPU Acceleration</b><br>
 Hashcat integration (mask + rule attacks) via <code>HashcatStrategy</code> when <code>hashcat</code> and JohnTheRipper <code>*2john</code> tools are installed
 </td>
@@ -130,8 +134,8 @@ hintforge dashboard
 Or use the Python API exposed in `src/hintforge/__init__.py`:
 
 ```python
-from hintforge import recover, extract_context, export_session, import_session
-from hintforge.models import SessionState
+from hintforge import recover, extract_context, export_session, import_session, estimate_strength
+from hintforge.models import SessionState, StrengthReport
 
 print(extract_context("protected.zip"))  # see auto-extracted terms
 
@@ -144,6 +148,9 @@ password = recover(
     resume=False
 )
 print(password)
+
+report: StrengthReport = estimate_strength("MaxTheDog2022!")
+print(f"Strength: {report.strength} ({report.entropy_bits} bits)")
 
 # Share recovery state
 export_session("protected.zip", "team_session.json")
@@ -165,6 +172,12 @@ Analyze encryption strength and get a recommendation:
 
 ```bash
 hintforge analyze backup.7z --format 7z
+```
+
+Estimate password strength and crack-time projections:
+
+```bash
+hintforge strength "Vacation2022Max!"
 ```
 
 Basic recovery with resume support:
@@ -209,6 +222,9 @@ enabled_strategies = ["ai", "dictionary", "mask", "hashcat"]
 min_score_threshold = 0.3
 use_gpu = true
 hashcat_mask = "?d?d?d?d?d?d?d?d"
+online_guesses_per_second = 5
+cpu_guesses_per_second = 1000000
+gpu_guesses_per_second = 100000000
 ```
 
 Then run a hybrid strategy directly from Python:
@@ -233,20 +249,23 @@ print([c.value for c in candidates[:5]])
 
 ## 🔧 Configuration
 
-| Option                | Default     | Description                                      |
-|-----------------------|-------------|--------------------------------------------------|
-| model                 | llama3      | Ollama model name (must be available locally)   |
-| max_candidates        | 75          | Maximum candidates to generate and test          |
-| temperature           | 0.75        | LLM temperature for candidate diversity          |
-| top_p                 | 0.9         | Nucleus sampling parameter                       |
-| enabled_strategies    | ["ai", "dictionary", "mask", "hashcat"] | Strategies used in hybrid mode |
-| dictionary_path       | None        | Optional custom wordlist path                    |
-| min_score_threshold   | 0.25        | Discard candidates below this score              |
-| hashcat_path          | hashcat     | Path to hashcat binary                           |
-| use_gpu               | true        | Use GPU devices (-D 2) for hashcat               |
-| hashcat_mask          | ?d?d?d?d?d?d?d?d | Default mask for mask-mode attacks          |
+| Option                        | Default       | Description                                      |
+|-------------------------------|---------------|--------------------------------------------------|
+| model                         | llama3        | Ollama model name (must be available locally)   |
+| max_candidates                | 75            | Maximum candidates to generate and test          |
+| temperature                   | 0.75          | LLM temperature for candidate diversity          |
+| top_p                         | 0.9           | Nucleus sampling parameter                       |
+| enabled_strategies            | ["ai", "dictionary", "mask", "hashcat"] | Strategies used in hybrid mode |
+| dictionary_path               | None          | Optional custom wordlist path                    |
+| min_score_threshold           | 0.25          | Discard candidates below this score              |
+| hashcat_path                  | hashcat       | Path to hashcat binary                           |
+| use_gpu                       | true          | Use GPU devices (-D 2) for hashcat               |
+| hashcat_mask                  | ?d?d?d?d?d?d?d?d | Default mask for mask-mode attacks          |
+| online_guesses_per_second     | 5             | Guesses/sec used for online crack-time projection |
+| cpu_guesses_per_second        | 1000000       | Guesses/sec used for CPU offline crack-time projection |
+| gpu_guesses_per_second        | 100000000     | Guesses/sec used for GPU offline crack-time projection |
 
-All values are defined in `models.Config` and loaded from `config.toml` by `utils.load_config()`.
+All values are defined in `models.Config` and loaded from `config.toml` by `utils.load_config()`. The built-in strength estimator uses the three speed parameters to project realistic crack times for archive-style hashes.
 
 ## 🧩 Architecture
 
@@ -305,7 +324,7 @@ The orchestrator in `core.py` coordinates the Context Oracle, pluggable strategi
 pytest -q
 ```
 
-Tests cover candidate generation (mocked Ollama in `test_oracle.py`), password testing with real fixture archives (`test_tester.py`), core orchestration, strategy merging, format detection, hash extraction, session serialization **and the new export/import functionality**. Run with the `[test]` extra. New tests validate `extract_context()` with temporary files and mocked EXIF as well as round-tripping of `SessionState` via export/import.
+Tests cover candidate generation (mocked Ollama in `test_oracle.py`), password testing with real fixture archives (`test_tester.py`), core orchestration, strategy merging, format detection, hash extraction, session serialization **and the new export/import functionality and password strength estimator**. Run with the `[test]` extra. New tests validate `extract_context()` with temporary files and mocked EXIF as well as round-tripping of `SessionState` via export/import and entropy/crack-time calculations in `estimate_strength()`.
 
 ## 📍 Roadmap
 
@@ -316,7 +335,7 @@ Tests cover candidate generation (mocked Ollama in `test_oracle.py`), password t
 - [x] Simple brutalist web dashboard for job monitoring
 - [x] Auto-extract context from filename, nearby files and EXIF
 - [x] Session export/import for sharing recovery state
-- [ ] Built-in password strength estimator with crack-time projection
+- [x] Built-in password strength estimator with crack-time projection
 - [ ] Plugin system for user-supplied Python generators
 - [ ] Parallel testing using ProcessPoolExecutor
 - [ ] Support for 7z and OpenSSL-encrypted TAR files

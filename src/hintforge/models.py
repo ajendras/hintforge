@@ -38,137 +38,79 @@ class Candidate(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    def __str__(self) -> str:
-        return f"{self.value} (score={self.score:.3f})"
-
 
 class Config(BaseModel):
-    """Global configuration for HintForge.
+    """Global configuration for HintForge operations."""
 
-    Loaded from config.toml (or defaults). Controls model selection,
-    candidate limits, enabled strategies and dictionary paths.
-    """
-
-    model: str = Field(
-        default="llama3",
-        description="Ollama model name (must be available locally).",
-    )
-    max_candidates: int = Field(
-        default=75,
-        ge=1,
-        le=500,
-        description="Maximum number of candidates to generate and test.",
-    )
-    temperature: float = Field(
-        default=0.75,
-        ge=0.0,
-        le=2.0,
-        description="Temperature for LLM generation.",
-    )
-    top_p: float = Field(default=0.9, ge=0.0, le=1.0)
+    model: str = "llama3"
+    max_candidates: int = 75
+    temperature: float = 0.75
+    top_p: float = 0.9
     enabled_strategies: list[str] = Field(
         default_factory=lambda: ["ai", "dictionary", "mask", "hashcat"],
-        description="Strategies used in hybrid mode.",
+        description="Strategies to run in hybrid mode.",
     )
-    dictionary_path: str | None = Field(
-        default=None,
-        description="Path to optional custom wordlist (one password per line).",
-    )
-    min_score_threshold: float = Field(
-        default=0.25,
-        ge=0.0,
-        le=1.0,
-        description="Discard candidates below this score.",
-    )
-    dry_run: bool = False
-    hashcat_path: str = Field(
-        default="hashcat",
-        description="Path or name of the hashcat executable.",
-    )
-    use_gpu: bool = Field(
-        default=True,
-        description="Use GPU devices for hashcat (-D 2).",
-    )
-    hashcat_mask: str | None = Field(
-        default="?d?d?d?d?d?d?d?d",
-        description="Default mask for hashcat mask attacks.",
-    )
-    hashcat_rules: str | None = Field(
-        default=None,
-        description="Optional rules file for hashcat rule attacks.",
-    )
-    hashcat_mode: int | None = Field(
-        default=None,
-        description="Override hashcat -m mode (auto-detected from format).",
-    )
-
-    model_config = ConfigDict(extra="forbid", validate_assignment=True)
-
-
-class SessionState(BaseModel):
-    """Serializable recovery session for checkpoint/resume and sharing via export/import.
-
-    Persisted as JSON in .hintforge/ directory. The export/import API and CLI
-    commands make it easy to share partial or complete recovery state.
-    """
-
-    archive_path: str
-    hint: str
-    candidates_tested: int = Field(default=0, ge=0)
-    total_candidates: int = Field(default=75, ge=1)
-    tested: set[str] = Field(default_factory=set)
-    found: str | None = None
-    start_time: float = Field(default=0.0)
-    end_time: float | None = None
-    candidates: list[Candidate] | None = None
-    strategy_stats: dict[str, Any] = Field(default_factory=dict)
-    version: str = Field(
-        default="0.2.0",
-        description="Session format version for forward compatibility when sharing.",
-    )
-
-    model_config = ConfigDict(
-        arbitrary_types_allowed=True,
-        extra="ignore",  # allow extra metadata from exported sessions
-    )
-
-    def mark_tested(self, password: str) -> None:
-        """Record a tested password (idempotent)."""
-        self.tested.add(password)
-        self.candidates_tested += 1
-
-    @field_serializer("tested")
-    def serialize_tested(self, tested: set[str]) -> list[str]:
-        """Serialize set to sorted list for JSON (replaces deprecated json_encoders)."""
-        return sorted(tested)
-
-
-class Job(BaseModel):
-    """Represents a complete recovery job (used by the web dashboard)."""
-
-    id: str = Field(
-        default_factory=lambda: uuid.uuid4().hex[:8],
-        description="Short unique job identifier",
-    )
-    archive_path: str
-    hint: str
-    config: Config
-    session: SessionState | None = None
-    status: str = Field(
-        default="pending",
-        pattern="^(pending|running|done|failed)$",
-    )
-    progress: float = Field(default=0.0, ge=0.0, le=1.0)
-    result: str | None = None
-    error: str | None = None
-    created_at: str = Field(
-        default_factory=lambda: datetime.now().isoformat(),
-    )
-    updated_at: str = Field(
-        default_factory=lambda: datetime.now().isoformat(),
-    )
+    dictionary_path: str | None = None
+    min_score_threshold: float = 0.25
+    hashcat_path: str = "hashcat"
+    use_gpu: bool = True
+    hashcat_mask: str = "?d?d?d?d?d?d?d?d"
+    online_guesses_per_second: int = 5
+    cpu_guesses_per_second: int = 1_000_000
+    gpu_guesses_per_second: int = 100_000_000
 
     model_config = ConfigDict(extra="forbid")
 
 
-__all__ = ["Candidate", "Config", "SessionState", "Job"]
+class SessionState(BaseModel):
+    """Persistent state for a recovery session."""
+
+    archive_path: str
+    hint: str
+    candidates_tested: int = 0
+    total_candidates: int = 75
+    tested: set[str] = Field(default_factory=set)
+    found: str | None = None
+    candidates: list[Candidate] = Field(default_factory=list)
+    start_time: float = 0.0
+    end_time: float | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class Job(BaseModel):
+    """Background job model for the web dashboard."""
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])
+    archive_path: str
+    hint: str
+    config: Config
+    status: str = "pending"
+    progress: float = 0.0
+    result: str | None = None
+    error: str | None = None
+    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    updated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class StrengthReport(BaseModel):
+    """Password strength report with entropy and crack-time projections."""
+
+    password: str
+    entropy_bits: float
+    crack_times: dict[str, str]
+    strength: str
+    feedback: list[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+__all__ = [
+    "Candidate",
+    "Config",
+    "SessionState",
+    "Job",
+    "StrengthReport",
+]

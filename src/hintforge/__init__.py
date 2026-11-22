@@ -9,11 +9,15 @@ EXIF/PDF metadata.
 
 Now includes session export/import for sharing recovery state
 across machines or with collaborators.
+
+The built-in password strength estimator provides entropy
+calculation and crack-time projections for online, CPU and
+GPU scenarios.
 """
 
 from __future__ import annotations
 
-from .models import Candidate, Job
+from .models import Candidate, Job, StrengthReport
 from .oracle import generate_candidates, extract_context
 from .core import (
     recover,
@@ -23,6 +27,7 @@ from .core import (
     start_job_in_background,
     export_session,
     import_session,
+    estimate_strength,
 )
 from .strategies import run_strategy
 from .dashboard import run_dashboard
@@ -40,8 +45,10 @@ __all__ = [
     "run_dashboard",
     "export_session",
     "import_session",
+    "estimate_strength",
     "Candidate",
     "Job",
+    "StrengthReport",
 ]
 
 __author__ = "HintForge Collective"

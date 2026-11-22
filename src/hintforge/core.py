@@ -9,6 +9,7 @@ Now includes export_session() / import_session() for sharing recovery state.
 from __future__ import annotations
 
 import json
+import math
 import time
 from datetime import datetime
 from pathlib import Path
@@ -18,7 +19,7 @@ from typing import Any
 from rich.console import Console
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 
-from .models import Candidate, Config, SessionState, Job
+from .models import Candidate, Config, SessionState, Job, StrengthReport
 from .oracle import generate_candidates
 from .strategies import run_strategy
 from .tester import try_password
@@ -69,6 +70,121 @@ def _save_session(state: SessionState) -> None:
         save_session(state)
     except Exception as exc:  # pragma: no cover
         console.print(f"[dim]Warning: could not save session: {exc}[/]")
+
+
+def _humanize_time(seconds: float) -> str:
+    """Convert seconds into a human-readable crack-time string."""
+    if seconds < 1:
+        return "< 1 second"
+    if seconds < 60:
+        return f"{seconds:.0f} seconds"
+    if seconds < 3600:
+        return f"{seconds / 60:.0f} minutes"
+    if seconds < 86400:
+        return f"{seconds / 3600:.1f} hours"
+    if seconds < 2_592_000:
+        return f"{seconds / 86400:.0f} days"
+    if seconds < 31_536_000:
+        return f"{seconds / 2_592_000:.0f} months"
+    years = seconds / 31_536_000
+    if years < 100:
+        return f"{years:.0f} years"
+    return "centuries"
+
+
+def estimate_strength(password: str, config: Config | None = None) -> StrengthReport:
+    """Built-in password strength estimator with crack-time projection.
+
+    Calculates entropy from character pool size, penalises common patterns,
+    and projects crack time for online, CPU-offline and GPU-offline scenarios
+    using the speeds defined in Config. Returns a StrengthReport model.
+    """
+    if not password or not isinstance(password, str):
+        return StrengthReport(
+            password="",
+            entropy_bits=0.0,
+            crack_times={},
+            strength="invalid",
+            feedback=["Password must be a non-empty string."],
+        )
+
+    if config is None:
+        config = load_config()
+
+    length = len(password)
+    has_lower = any(c.islower() for c in password)
+    has_upper = any(c.isupper() for c in password)
+    has_digit = any(c.isdigit() for c in password)
+    has_special = any(not c.isalnum() for c in password)
+
+    pool = 0
+    if has_lower:
+        pool += 26
+    if has_upper:
+        pool += 26
+    if has_digit:
+        pool += 10
+    if has_special:
+        pool += 32
+    if pool == 0:
+        pool = 10
+
+    entropy = length * math.log2(pool)
+
+    lower_pw = password.lower()
+    common = ["password", "123456", "qwerty", "abc123", "letmein", "admin", "welcome", "monkey"]
+    if any(word in lower_pw for word in common):
+        entropy *= 0.4
+    if password.isnumeric() or password.isalpha() or password == password[::-1]:
+        entropy *= 0.65
+
+    entropy = round(min(max(entropy, 0.0), 140.0), 2)
+
+    speeds = {
+        "online": config.online_guesses_per_second,
+        "cpu_offline": config.cpu_guesses_per_second,
+        "gpu_offline": config.gpu_guesses_per_second,
+    }
+
+    crack_times = {}
+    for name, speed in speeds.items():
+        # conservative full keyspace (realistic average is ~50%)
+        seconds = (2**entropy) / speed if entropy > 0 else 0.0
+        crack_times[name] = _humanize_time(seconds)
+
+    if entropy < 30:
+        strength = "very weak"
+        feedback = [
+            "Extremely easy to guess or brute-force.",
+            "Never use this for important archives.",
+        ]
+    elif entropy < 50:
+        strength = "weak"
+        feedback = ["Still vulnerable to dictionary + rule attacks."]
+    elif entropy < 70:
+        strength = "moderate"
+        feedback = ["Acceptable for low-value data."]
+    elif entropy < 100:
+        strength = "strong"
+        feedback = ["Good resistance against offline attacks."]
+    else:
+        strength = "very strong"
+        feedback = ["Extremely difficult to crack with current hardware."]
+
+    if length < 12:
+        feedback.append("Increase length to at least 16 characters.")
+    if not (has_lower and has_upper and has_digit and has_special):
+        feedback.append("Mix uppercase, lowercase, numbers and symbols.")
+    if any(word in lower_pw for word in ["birth", "name", "dog", "cat", "year", "202"]):
+        feedback.append("Avoid personal information and predictable patterns.")
+
+    return StrengthReport(
+        password=password,
+        entropy_bits=entropy,
+        crack_times=crack_times,
+        strength=strength,
+        feedback=feedback,
+    )
 
 
 def analyze(archive_path: str, forced_format: str | None = None) -> dict[str, Any]:
@@ -428,4 +544,5 @@ __all__ = [
     "start_job_in_background",
     "export_session",
     "import_session",
+    "estimate_strength",
 ]
