@@ -132,10 +132,28 @@ def estimate_strength(password: str, config: Config | None = None) -> StrengthRe
     entropy = length * math.log2(pool)
 
     lower_pw = password.lower()
-    common = ["password", "123456", "qwerty", "abc123", "letmein", "admin", "welcome", "monkey"]
+    common = [
+        "password",
+        "123456",
+        "qwerty",
+        "abc123",
+        "letmein",
+        "admin",
+        "welcome",
+        "monkey",
+        "dog",
+        "max",
+        "2020",
+        "2023",
+        "vacation",
+        "birth",
+        "name",
+        "pet",
+        "family",
+    ]
     if any(word in lower_pw for word in common):
         entropy *= 0.4
-    if password.isnumeric() or password.isalpha() or password == password[::-1]:
+    if password.isnumeric() or (password.isalpha() and len(password) >= 6) or password == password[::-1]:
         entropy *= 0.65
 
     entropy = round(min(max(entropy, 0.0), 140.0), 2)

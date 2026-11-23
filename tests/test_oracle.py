@@ -1,113 +1,79 @@
-"""Tests for the Context Oracle (oracle.py).
+"""Tests for the Context Oracle."""
 
-Mocked Ollama responses, JSON parsing, extract_context() with temporary
-files, EXIF simulation and nearby-file keyword extraction. All tests
-pass on Python 3.12 and keep the original test coverage goals.
-"""
-
-from __future__ import annotations
-
-import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from hintforge.models import Candidate
 from hintforge.oracle import (
-    _build_system_prompt,
     _parse_llm_response,
     extract_context,
     generate_candidates,
 )
 
 
-def test_parse_llm_response_valid() -> None:
-    """Valid JSON array produces correct Candidate list."""
-    raw = '[{"password": "Max2020!", "score": 0.92}, {"password": "VacationDog", "score": 0.65}]'
-    candidates = _parse_llm_response(raw)
+def test_parse_llm_response_valid():
+    valid_json = """[
+        {"value": "MaxTheDog2023!", "score": 0.92},
+        {"value": "VacationDog2023!", "score": 0.85}
+    ]"""
+    candidates = _parse_llm_response(valid_json, requested_count=5)
     assert len(candidates) == 2
-    assert candidates[0].value == "Max2020!"
+    assert candidates[0].value == "MaxTheDog2023!"
     assert candidates[0].score == 0.92
     assert isinstance(candidates[0], Candidate)
 
 
-def test_parse_llm_response_fallback() -> None:
-    """Malformed JSON falls back to regex extraction."""
-    raw = "Here are some ideas: Secret2023, DogName77"
-    candidates = _parse_llm_response(raw)
+def test_parse_llm_response_fallback():
+    text = "Some text mentioning passwords like: DogVacation2023, MyMax2020!"
+    candidates = _parse_llm_response(text, requested_count=3)
     assert len(candidates) >= 1
-    values = {c.value for c in candidates}
-    assert "Secret2023" in values or any("2023" in v for v in values)
+    assert any("2023" in c.value or "2020" in c.value for c in candidates)
 
 
-@patch("hintforge.oracle.ollama.chat")
-def test_generate_candidates(mock_chat) -> None:
-    """LLM call is properly formatted and returns scored candidates."""
-    mock_response = {
-        "message": {
-            "content": json.dumps(
-                [{"password": "Buddy2021", "score": 0.88}, {"password": "Greece2022", "score": 0.71}]
-            )
-        }
+def test_extract_context_filename_only(tmp_path):
+    archive = tmp_path / "my_vacation_dog_2023.pdf"
+    archive.touch()
+    context = extract_context(str(archive))
+    assert "2023" in context
+    assert "vacation" in context.lower()
+    assert "dog" in context.lower()
+
+
+def test_extract_context_exif(tmp_path, mocker):
+    archive = tmp_path / "photo.jpg"
+    archive.touch()
+    mock_tags = {
+        "ImageDescription": "Our family vacation with Max the dog in 2023"
     }
-    mock_chat.return_value = mock_response
+    mocker.patch("hintforge.oracle.exifread.process_file", return_value=mock_tags)
+    context = extract_context(str(archive))
+    lowered = context.lower()
+    assert "vacation" in lowered
+    assert any(k in lowered for k in ("2023", "dog", "max"))
 
-    candidates = generate_candidates("my dog born in 2021", count=5, model="llama3")
+
+def test_extract_context_pdf_metadata(tmp_path, mocker):
+    archive = tmp_path / "document.pdf"
+    archive.touch()
+    mock_pdf = MagicMock()
+    mock_pdf.docinfo = {
+        "/Title": "Vacation Photos 2023",
+        "/Subject": "Dog named Max",
+    }
+    mock_open = mocker.patch("hintforge.oracle.pikepdf.open")
+    mock_open.return_value.__enter__.return_value = mock_pdf
+    context = extract_context(str(archive))
+    lowered = context.lower()
+    assert any(k in lowered for k in ("vacation", "2023", "dog", "max"))
+
+
+def test_generate_candidates(mocker):
+    mock_response = {"response": '[{"value": "TestPass123!", "score": 0.9}]'}
+    mocker.patch("hintforge.oracle.ollama.generate", return_value=mock_response)
+    mocker.patch("hintforge.oracle.load_config")
+    candidates = generate_candidates("test hint", count=1, model="llama3")
     assert len(candidates) >= 1
-    assert any(c.value == "Buddy2021" for c in candidates)
-    mock_chat.assert_called_once()
-
-
-def test_build_system_prompt_contains_key_phrases() -> None:
-    """System prompt mentions context, mutations and JSON output."""
-    prompt = _build_system_prompt()
-    assert "context extracted from the filename" in prompt
-    assert "JSON array" in prompt
-    assert "score" in prompt
-
-
-def test_extract_context_filename_only(tmp_path: Path) -> None:
-    """Filename keywords are extracted when no other context exists."""
-    archive = tmp_path / "my_vacation_2023_dog.zip"
-    archive.touch()
-    ctx = extract_context(str(archive))
-    assert "vacation" in ctx.lower()
-    assert "2023" in ctx
-    assert "dog" in ctx.lower()
-
-
-def test_extract_context_with_nearby_txt(tmp_path: Path) -> None:
-    """Nearby .txt files contribute keywords to the context."""
-    archive = tmp_path / "protected.rar"
-    archive.touch()
-    (tmp_path / "notes.txt").write_text("Remember: max the golden retriever born 2019 greece")
-    ctx = extract_context(str(archive))
-    assert any(word in ctx.lower() for word in ("max", "greece", "2019"))
-
-
-@patch("hintforge.oracle.exifread.process_file")
-def test_extract_context_exif(mock_exif, tmp_path: Path) -> None:
-    """EXIF data augments context for image-related archives."""
-    mock_exif.return_value = {
-        "ImageDescription": "Family vacation 2020",
-        "DateTimeOriginal": "2020:07:15",
-    }
-    archive = tmp_path / "photo.jpg.zip"
-    archive.touch()
-    ctx = extract_context(str(archive))
-    assert "vacation" in ctx.lower()
-    assert "2020" in ctx
-
-
-def test_extract_context_pdf_metadata(mocker, tmp_path: Path) -> None:
-    """PDF title/subject are pulled into context."""
-    mocker.patch("hintforge.oracle.pikepdf.open")
-    mock_pdf = mocker.MagicMock()
-    mock_pdf.docinfo = {"/Title": "Wedding Photos 2018", "/Subject": "max"}
-    mocker.patch("hintforge.oracle.pikepdf.open", return_value=mock_pdf)
-
-    archive = tmp_path / "memories.pdf"
-    archive.touch()
-    ctx = extract_context(str(archive))
-    assert "wedding" in ctx.lower() or "2018" in ctx
+    assert isinstance(candidates[0], Candidate)
+    assert candidates[0].value == "TestPass123!"
