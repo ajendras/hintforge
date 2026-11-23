@@ -145,6 +145,23 @@ def open_with_password(
         raise
 
 
+def _get_hashcat_mode(archive_path: str, forced_format: str | None = None) -> int | None:
+    """Return the hashcat -m mode for the detected format.
+
+    Used internally by HashcatStrategy (and imported by strategies.py).
+    Returns None for formats without a direct hashcat equivalent.
+    """
+    fmt = forced_format or detect_format(archive_path)
+    mode_map: dict[str, int] = {
+        "zip": 13600,    # PKZIP
+        "rar": 13000,    # RAR5
+        "pdf": 10500,    # PDF
+        "7z": 11600,     # 7-Zip
+        "office": 9600,  # MS Office 2007+
+    }
+    return mode_map.get(fmt)
+
+
 def extract_hash(archive_path: str, forced_format: str | None = None) -> str | None:
     """Extract hash for hashcat using john *2john tools if available."""
     fmt = forced_format or detect_format(archive_path)
