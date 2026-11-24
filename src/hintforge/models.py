@@ -47,14 +47,18 @@ class Config(BaseModel):
     temperature: float = 0.75
     top_p: float = 0.9
     enabled_strategies: list[str] = Field(
-        default_factory=lambda: ["ai", "dictionary", "mask", "hashcat"],
-        description="Strategies to run in hybrid mode.",
+        default_factory=lambda: ["ai", "dictionary", "mask", "hashcat", "plugin"],
+        description="Strategies used in hybrid mode.",
     )
     dictionary_path: str | None = None
     min_score_threshold: float = 0.25
     hashcat_path: str = "hashcat"
     use_gpu: bool = True
     hashcat_mask: str = "?d?d?d?d?d?d?d?d"
+    plugin_paths: list[str] = Field(
+        default_factory=list,
+        description="Paths to .py files that export a generate(hint, **kwargs) generator.",
+    )
     online_guesses_per_second: int = 5
     cpu_guesses_per_second: int = 1_000_000
     gpu_guesses_per_second: int = 100_000_000

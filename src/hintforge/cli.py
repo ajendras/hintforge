@@ -115,6 +115,13 @@ def cli() -> None:
     is_flag=True,
     help="Resume from previous session checkpoint if available",
 )
+@click.option(
+    "--plugin",
+    "-P",
+    multiple=True,
+    type=click.Path(exists=True, dir_okay=False, readable=True, path_type=str),
+    help="Path to Python plugin file exporting generate(hint, **kwargs). Repeatable.",
+)
 def recover_cmd(
     archive: Path,
     hint: str,
@@ -123,6 +130,7 @@ def recover_cmd(
     format: str,
     dry_run: bool,
     resume: bool,
+    plugin: tuple[str, ...],
 ) -> None:
     """Recover password for an encrypted archive using AI-generated candidates."""
     _brutalist_header(
@@ -146,6 +154,7 @@ def recover_cmd(
             forced_format=format if format != "auto" else None,
             dry_run=dry_run,
             resume=resume,
+            plugins=list(plugin) if plugin else None,
         )
 
         if password:

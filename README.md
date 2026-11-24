@@ -31,6 +31,7 @@ People regularly forget passwords to their own archives. Brute-force and plain d
 - **Brutalist live UI**: Real-time progress, ETA and chunky neo-brutalist panels built with Rich
 - **GPU acceleration**: Optional Hashcat integration for mask and rule attacks when JohnTheRipper + hashcat are available
 - **Web Dashboard**: Simple neo-brutalist Flask UI for launching and monitoring multiple recovery jobs
+- **Plugin system**: Drop in Python files containing `generate(hint, **kwargs)` generator functions; automatically merged by the hybrid pipeline when listed in `plugin_paths`
 
 ## 🎬 Demo
 
@@ -101,6 +102,12 @@ Hashcat integration (mask + rule attacks) via <code>HashcatStrategy</code> when 
 Simple neo-brutalist Flask UI (<code>hintforge dashboard</code>) for job creation, live monitoring and chunky progress
 </td>
 </tr>
+<tr>
+<td colspan="3">
+🔌 <b>Plugin System</b><br>
+User-supplied Python generator functions loaded from <code>plugin_paths</code>; merged into hybrid pipeline with <code>Candidate</code> scoring
+</td>
+</tr>
 </table>
 
 ## 📦 Installation
@@ -134,7 +141,7 @@ hintforge dashboard
 Or use the Python API exposed in `src/hintforge/__init__.py`:
 
 ```python
-from hintforge import recover, extract_context, export_session, import_session, estimate_strength
+from hintforge import recover, extract_context, export_session, import_session, estimate_strength, load_plugin_generators
 from hintforge.models import SessionState, StrengthReport
 
 print(extract_context("protected.zip"))  # see auto-extracted terms
@@ -208,6 +215,29 @@ Start the web dashboard (opens a neo-brutalist monitoring interface):
 hintforge dashboard --port 8080
 ```
 
+**Using the plugin system:**
+
+Create a Python file (`my_generators.py`) with a generator function:
+
+```python
+from collections.abc import Iterator
+from hintforge.models import Candidate
+
+def generate(hint: str, **kwargs) -> Iterator[str | Candidate]:
+    """User-supplied generator – can use hint, config, archive_path etc."""
+    yield hint.replace(" ", "") + "2024!"
+    yield "My" + hint.split()[0].capitalize() + "Pass123"
+    yield Candidate(score=0.85, value="CustomPlugin2025", metadata={"source": "myplugin"})
+```
+
+Reference it in `config.toml` or on the CLI:
+
+```bash
+hintforge recover archive.rar --hint "vacation pet" --plugin my_generators.py
+```
+
+The hybrid strategy automatically includes yielded passwords (scored 0.6 by default) alongside AI/dictionary/mask/hashcat candidates. Multiple `--plugin` flags or a list in `plugin_paths` are supported.
+
 When `hashcat` and JohnTheRipper tools are present and `hashcat` is listed in `enabled_strategies`, the hybrid pipeline automatically runs GPU-accelerated mask and rule attacks after the CPU strategies.
 
 <details><summary>Advanced: custom config and strategy control</summary>
@@ -218,10 +248,11 @@ Create a `config.toml` (loaded by `utils.load_config()`):
 model = "llama3"
 max_candidates = 100
 temperature = 0.7
-enabled_strategies = ["ai", "dictionary", "mask", "hashcat"]
+enabled_strategies = ["ai", "dictionary", "mask", "hashcat", "plugin"]
 min_score_threshold = 0.3
 use_gpu = true
 hashcat_mask = "?d?d?d?d?d?d?d?d"
+plugin_paths = ["my_generators.py"]
 online_guesses_per_second = 5
 cpu_guesses_per_second = 1000000
 gpu_guesses_per_second = 100000000
@@ -233,7 +264,7 @@ Then run a hybrid strategy directly from Python:
 from hintforge import run_strategy, Candidate, Config
 from hintforge.models import Candidate
 
-config = Config(max_candidates=50, model="llama3", enabled_strategies=["ai", "hashcat"])
+config = Config(max_candidates=50, model="llama3", enabled_strategies=["ai", "hashcat", "plugin"], plugin_paths=["my_generators.py"])
 seed = [Candidate(score=0.9, value="Max2019!")]
 
 candidates = run_strategy(
@@ -255,17 +286,18 @@ print([c.value for c in candidates[:5]])
 | max_candidates                | 75            | Maximum candidates to generate and test          |
 | temperature                   | 0.75          | LLM temperature for candidate diversity          |
 | top_p                         | 0.9           | Nucleus sampling parameter                       |
-| enabled_strategies            | ["ai", "dictionary", "mask", "hashcat"] | Strategies used in hybrid mode |
+| enabled_strategies            | ["ai", "dictionary", "mask", "hashcat", "plugin"] | Strategies used in hybrid mode |
 | dictionary_path               | None          | Optional custom wordlist path                    |
 | min_score_threshold           | 0.25          | Discard candidates below this score              |
 | hashcat_path                  | hashcat       | Path to hashcat binary                           |
 | use_gpu                       | true          | Use GPU devices (-D 2) for hashcat               |
 | hashcat_mask                  | ?d?d?d?d?d?d?d?d | Default mask for mask-mode attacks          |
+| plugin_paths                  | []            | List of paths to .py files exporting `generate(hint, **kwargs)` generators |
 | online_guesses_per_second     | 5             | Guesses/sec used for online crack-time projection |
 | cpu_guesses_per_second        | 1000000       | Guesses/sec used for CPU offline crack-time projection |
 | gpu_guesses_per_second        | 100000000     | Guesses/sec used for GPU offline crack-time projection |
 
-All values are defined in `models.Config` and loaded from `config.toml` by `utils.load_config()`. The built-in strength estimator uses the three speed parameters to project realistic crack times for archive-style hashes.
+All values are defined in `models.Config` and loaded from `config.toml` by `utils.load_config()`. The built-in strength estimator uses the three speed parameters to project realistic crack times for archive-style hashes. Plugin modules are loaded with `importlib` and must export a callable named `generate` (or `generate_candidates`) that accepts a hint and yields strings or `Candidate` objects.
 
 ## 🧩 Architecture
 
@@ -280,19 +312,20 @@ flowchart TD
     Strategies --> DictionaryStrategy[DictionaryStrategy]
     Strategies --> MaskStrategy[MaskStrategy]
     Strategies --> HashcatStrategy[HashcatStrategy<br>GPU mask/rule]
+    Strategies --> PluginStrategy[PluginStrategy<br>user Python generators via load_plugin_generators()]
     Core --> Tester[tester.py<br>try_password()]
     Tester --> Handlers[handlers.py<br>detect_format() + open_with_password() + extract_hash()]
     Core --> Session[(SessionState<br>.hintforge/*.json<br>export/import)]
     Core --> Jobs[(Job<br>.hintforge/job-*.json)]
     Core --> Dashboard[dashboard.py<br>Flask brutalist UI]
-    Core --> Utils[utils.py<br>load_config() + brutalist_panel() + sanitize_password() + run_hashcat() + job persistence]
+    Core --> Utils[utils.py<br>load_config() + brutalist_panel() + sanitize_password() + run_hashcat() + load_plugin_generators() + job persistence]
     Handlers --> ZIP[RAR/PDF/7z/TAR/OFFICE handlers]
     Handlers --> John[JohnTheRipper *2john tools]
     Strategies --> Hashcat[hashcat binary (GPU)]
     Dashboard --> Browser[(Browser<br>neo-brutalist UI)]
 ```
 
-The orchestrator in `core.py` coordinates the Context Oracle, pluggable strategies, tester facade and session persistence. All data flows through Pydantic `Candidate` and `Config` models, keeping the pipeline type-safe, resumable and easy to extend. The new dashboard provides a web front-end for job management using the same models. `extract_context()` automatically enriches every hint when an `archive_path` is supplied. Session export/import makes it trivial to share partial or complete recovery state.
+The orchestrator in `core.py` coordinates the Context Oracle, pluggable strategies, tester facade and session persistence. All data flows through Pydantic `Candidate` and `Config` models, keeping the pipeline type-safe, resumable and easy to extend. The new dashboard provides a web front-end for job management using the same models. `extract_context()` automatically enriches every hint when an `archive_path` is supplied. Session export/import makes it trivial to share partial or complete recovery state. The plugin system lets users extend candidate generation by dropping in simple Python files; `PluginStrategy` discovers `generate()` callables via `load_plugin_generators()` and injects them into the hybrid flow with appropriate scoring.
 
 ## 📁 Project structure
 
@@ -305,15 +338,15 @@ The orchestrator in `core.py` coordinates the Context Oracle, pluggable strategi
 │   ├── cli.py                     # Click commands + neo-brutalist Rich UI (_brutalist_header, HEAVY boxes)
 │   ├── core.py                    # Orchestrator: recover(), analyze(), session handling, export/import + job management
 │   ├── oracle.py                  # Ollama integration, JSON parsing, _parse_llm_response(), extract_context()
-│   ├── strategies.py              # BaseStrategy, AIStrategy, DictionaryStrategy, MaskStrategy, HashcatStrategy, run_strategy()
+│   ├── strategies.py              # BaseStrategy, AIStrategy, DictionaryStrategy, MaskStrategy, HashcatStrategy, PluginStrategy, run_strategy()
 │   ├── tester.py                  # try_password(), format-specific _test_* helpers
 │   ├── handlers.py                # detect_format(), open_with_password(), extract_hash(), PasswordError (now with Office)
 │   ├── models.py                  # Pydantic models: Candidate, Config, SessionState, Job (enhanced for dashboard)
-│   ├── utils.py                   # load_config(), save_session(), brutalist_panel(), sanitize_password(), run_hashcat(), load_jobs(), save_job()
+│   ├── utils.py                   # load_config(), save_session(), brutalist_panel(), sanitize_password(), run_hashcat(), load_jobs(), save_job(), load_plugin_generators()
 │   └── dashboard.py               # Brutalist Flask web UI + job creation/monitoring
 ├── tests/
 │   ├── test_oracle.py             # Mocked Ollama responses, parsing and extract_context tests
-│   └── test_tester.py             # Unit + integration tests with fixture archives (now includes hashcat mocks + session export/import)
+│   └── test_tester.py             # Unit + integration tests with fixture archives (now includes hashcat mocks + session export/import + plugin tests)
 ├── examples/recovery_demo.py      # Runnable full-workflow example with test RAR
 └── LICENSE
 ```
@@ -324,7 +357,7 @@ The orchestrator in `core.py` coordinates the Context Oracle, pluggable strategi
 pytest -q
 ```
 
-Tests cover candidate generation (mocked Ollama in `test_oracle.py`), password testing with real fixture archives (`test_tester.py`), core orchestration, strategy merging, format detection, hash extraction, session serialization **and the new export/import functionality and password strength estimator**. Run with the `[test]` extra. New tests validate `extract_context()` with temporary files and mocked EXIF as well as round-tripping of `SessionState` via export/import and entropy/crack-time calculations in `estimate_strength()`.
+Tests cover candidate generation (mocked Ollama in `test_oracle.py`), password testing with real fixture archives (`test_tester.py`), core orchestration, strategy merging, format detection, hash extraction, session serialization **and the new export/import functionality and password strength estimator**. Run with the `[test]` extra. New tests validate `extract_context()` with temporary files and mocked EXIF as well as round-tripping of `SessionState` via export/import and entropy/crack-time calculations in `estimate_strength()`. The plugin system is exercised with temporary generator files and patched loaders.
 
 ## 📍 Roadmap
 
@@ -336,7 +369,7 @@ Tests cover candidate generation (mocked Ollama in `test_oracle.py`), password t
 - [x] Auto-extract context from filename, nearby files and EXIF
 - [x] Session export/import for sharing recovery state
 - [x] Built-in password strength estimator with crack-time projection
-- [ ] Plugin system for user-supplied Python generators
+- [x] Plugin system for user-supplied Python generators
 - [ ] Parallel testing using ProcessPoolExecutor
 - [ ] Support for 7z and OpenSSL-encrypted TAR files
 - [ ] Verbose logging and JSON result export

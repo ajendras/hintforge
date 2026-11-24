@@ -267,12 +267,13 @@ def recover(
     forced_format: str | None = None,
     dry_run: bool = False,
     resume: bool = False,
+    plugins: list[str] | None = None,
 ) -> str | None:
     """Orchestrate full password recovery pipeline.
 
     1. Load/merge session (if resuming)
     2. Generate AI candidates via Oracle (augmented by extract_context())
-    3. Augment with pluggable strategies (dictionary, mask, hashcat GPU)
+    3. Augment with pluggable strategies (dictionary, mask, hashcat GPU, user plugins)
     4. Rank by likelihood
     5. Test candidates in order using format-specific handlers
     6. Provide live brutalist progress UI
@@ -288,6 +289,8 @@ def recover(
     config = load_config()
     config.model = model
     config.max_candidates = max_candidates
+    if plugins:
+        config.plugin_paths = list(dict.fromkeys(config.plugin_paths + plugins))
 
     session = _load_or_create_session(archive_path, hint, max_candidates, resume)
     if session.found:
@@ -308,7 +311,7 @@ def recover(
             console.print(f"[#ff0044]Oracle failed: {exc}[/#ff0044]")
             ai_candidates = []
 
-        # Run hybrid strategies (dictionary + mask + hashcat GPU)
+        # Run hybrid strategies (dictionary + mask + hashcat GPU + plugins)
         try:
             augmented = run_strategy(
                 strategy="hybrid",

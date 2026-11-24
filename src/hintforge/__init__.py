@@ -13,6 +13,11 @@ across machines or with collaborators.
 The built-in password strength estimator provides entropy
 calculation and crack-time projections for online, CPU and
 GPU scenarios.
+
+Includes a plugin system: supply Python files exporting a
+`generate(hint: str, **kwargs)` generator (yields str or Candidate)
+and list them in config.plugin_paths or via --plugin on the CLI.
+They are automatically merged by PluginStrategy inside run_strategy("hybrid").
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ from .core import (
 )
 from .strategies import run_strategy
 from .dashboard import run_dashboard
+from .utils import load_plugin_generators
 
 __version__ = "0.1.0"
 __all__ = [
@@ -46,6 +52,7 @@ __all__ = [
     "export_session",
     "import_session",
     "estimate_strength",
+    "load_plugin_generators",
     "Candidate",
     "Job",
     "StrengthReport",
