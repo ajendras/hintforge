@@ -112,7 +112,7 @@ User-supplied Python generator functions loaded from <code>plugin_paths</code>; 
 
 ## 📦 Installation
 
-Requires Python 3.9+ and a running Ollama instance (e.g. `llama3`). Office (docx/xlsx) support is available via the `[office]` extra. The web dashboard is available via the `[web]` extra.
+Requires Python 3.10+ and a running Ollama instance (e.g. `llama3`). Office (docx/xlsx) support is available via the `[office]` extra. The web dashboard is available via the `[web]` extra.
 
 ```bash
 pip install "git+https://github.com/ajendras/hintforge.git#egg=hintforge[office,web]"
